@@ -2,18 +2,17 @@ name: CI Pipeline
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # every 10 mins - runs main.py only
+    - cron: '* * * * *'     # every minute for testing, change back after
   workflow_dispatch:
   push:
     branches:
-      - main                  # on push - builds docker + runs everything
+      - main
 
 jobs:
-
   # ── JOB 1: Runs only on push ──────────────────────────────
   docker-build-and-run:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'   # ← only triggers on push
+    if: github.event_name == 'push'
 
     steps:
       - name: Checkout repository
@@ -30,11 +29,10 @@ jobs:
             -e MANDI_COLLECTION="${{ secrets.MANDI_COLLECTION }}" \
             my-app python main.py
 
-
-  # ── JOB 2: Runs every 10 minutes ─────────────────────────
+  # ── JOB 2: Runs on schedule OR manual trigger ─────────────
   scheduled-run:
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name != 'push'    # ← simpler condition, runs on everything except push
 
     steps:
       - name: Checkout repository
