@@ -1,29 +1,56 @@
-name: Build Docker Image & Run every 2 hours
+name: CI Pipeline
 
 on:
   schedule:
-    # - cron: '0 */2 * * *'
-    - cron: '*/2 * * * *'
+    - cron: '*/10 * * * *'   # every 10 mins - runs main.py only
   workflow_dispatch:
   push:
     branches:
-      - main          # 🔁 Rebuilds image every time you push
+      - main                  # on push - builds docker + runs everything
 
 jobs:
-  build-and-run:
+
+  # ── JOB 1: Runs only on push ──────────────────────────────
+  docker-build-and-run:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'   # ← only triggers on push
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── Build the Docker image ──────────────────────────────
       - name: Build Docker image
-        run: docker build -t mand-price .     # 🔁 Change "my-app" to your image name
+        run: docker build -t my-app .
 
-      # ── Run your scripts inside the container ───────────────
-      - name: Run main.py
+      - name: Run main.py in Docker
         run: |
           docker run --rm \
-            -e MONGO_URI=${{ secrets.MONGO_URI }} \
-            mand-price python main.py
+            -e MONGO_URI="${{ secrets.MONGO_URI }}" \
+            -e DB_NAME="${{ secrets.DB_NAME }}" \
+             -e DB_NAME="${{ secrets.MANDI_COLLECTION }}" \
+            my-app python main.py
+
+
+  # ── JOB 2: Runs every 10 minutes ─────────────────────────
+  scheduled-run:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run main.py
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          MANDI_COLLECTION: ${{ secrets.MANDI_COLLECTION }}
+        run: python main.py
