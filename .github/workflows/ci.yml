@@ -2,7 +2,7 @@ name: CI Pipeline
 
 on:
   schedule:
-    - cron: '* * * * *'     # every minute for testing, change back after
+    - cron: '15 * * * *'   # every 10 mins
   workflow_dispatch:
   push:
     branches:
@@ -27,7 +27,7 @@ jobs:
             -e MONGO_URI="${{ secrets.MONGO_URI }}" \
             -e MANDI_DB_NAME="${{ secrets.MANDI_DB_NAME }}" \
             -e MANDI_COLLECTION="${{ secrets.MANDI_COLLECTION }}" \
-            my-app python main_print.py
+            my-app python main.py
 
   # ── JOB 2: Runs on schedule OR manual trigger ─────────────
   scheduled-run:
@@ -51,4 +51,4 @@ jobs:
           MONGO_URI: ${{ secrets.MONGO_URI }}
           MANDI_DB_NAME: ${{ secrets.MANDI_DB_NAME }}
           MANDI_COLLECTION: ${{ secrets.MANDI_COLLECTION }}
-        run: python main_print.py
+        run: python main.py
