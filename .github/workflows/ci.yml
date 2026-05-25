@@ -1,0 +1,29 @@
+name: Build Docker Image & Run every 2 hours
+
+on:
+  schedule:
+    # - cron: '0 */2 * * *'
+    -cron: '*/2 * * * *'
+  workflow_dispatch:
+  push:
+    branches:
+      - main          # 🔁 Rebuilds image every time you push
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Build the Docker image ──────────────────────────────
+      - name: Build Docker image
+        run: docker build -t mand-price .     # 🔁 Change "my-app" to your image name
+
+      # ── Run your scripts inside the container ───────────────
+      - name: Run main.py
+        run: |
+          docker run --rm \
+            -e MONGO_URI=${{ secrets.MONGO_URI }} \
+            mand-price python main.py

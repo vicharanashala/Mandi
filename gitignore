@@ -1,0 +1,130 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# =========================
+# Environment Variables
+# =========================
+.env
+.env.*
+*.env
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+
+# =========================
+# Testing
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# =========================
+# Build / Distribution
+# =========================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+# Jupyter Notebook
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Database Files
+# =========================
+*.sqlite3
+*.db
+
+# Mongo dump backups
+dump/
+backup/
+
+# =========================
+# Scraper Data
+# =========================
+data/
+downloads/
+temp/
+tmp/
+cache/
+
+# JSON/CSV outputs (optional)
+*.csv
+*.xlsx
+*.json
+
+# If you WANT some json files:
+# !config.json
+
+# =========================
+# Selenium / Playwright
+# =========================
+.chromedriver/
+playwright-report/
+test-results/
+
+# =========================
+# Node.js (if frontend exists)
+# =========================
+node_modules/
+npm-debug.log*
+
+# =========================
+# Docker
+# =========================
+.dockerignore
+
+# =========================
+# Secrets / Keys
+# =========================
+*.pem
+*.key
+*.crt
+
+# =========================
+# Mac/Linux hidden
+# =========================
+*.pid
+*.seed
+
+# =========================
+# mypy / Ruff / lint
+# =========================
+.mypy_cache/
+.ruff_cache/
+
+# =========================
+# Package lock files (optional)
+# =========================
+# poetry.lock
+# Pipfile.lock
