@@ -26,8 +26,8 @@ jobs:
         run: |
           docker run --rm \
             -e MONGO_URI="${{ secrets.MONGO_URI }}" \
-            -e DB_NAME="${{ secrets.DB_NAME }}" \
-             -e DB_NAME="${{ secrets.MANDI_COLLECTION }}" \
+            -e MANDI_DB_NAME="${{ secrets.DB_NAME }}" \
+            -e MANDI_COLLECTION="${{ secrets.MANDI_COLLECTION }}" \
             my-app python main.py
 
 
@@ -51,6 +51,6 @@ jobs:
       - name: Run main.py
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
-          DB_NAME: ${{ secrets.DB_NAME }}
+          MANDI_DB_NAME: ${{ secrets.DB_NAME }}
           MANDI_COLLECTION: ${{ secrets.MANDI_COLLECTION }}
         run: python main.py
