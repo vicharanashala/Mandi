@@ -3,7 +3,7 @@ name: Build Docker Image & Run every 2 hours
 on:
   schedule:
     # - cron: '0 */2 * * *'
-    -cron: '*/2 * * * *'
+    - cron: '*/2 * * * *'
   workflow_dispatch:
   push:
     branches:
