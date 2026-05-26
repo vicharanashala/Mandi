@@ -29,7 +29,7 @@ from utils.sources import sources
 # CONFIG
 # ─────────────────────────────────────────────
 MONGO_URI   = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-DB_NAME     = os.getenv("MANDI_DB_NAME")
+DB_NAME     = os.getenv("MANDI_DB_NAME").strip()
 COLLECTION  = os.getenv("MANDI_COLLECTION")
 
 
