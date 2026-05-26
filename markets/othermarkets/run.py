@@ -99,84 +99,108 @@ async def fetch_karnataka_state_daily(
     playwright_instance = None
     browser = None
 
-    try:
-        playwright_instance = await async_playwright().start()
+    # Retry the whole Playwright session up to 3 times to handle transient
+    # CI network timeouts that are common when hitting slow government sites.
+    _KARNATAKA_MAX_RETRIES = 3
+    _KARNATAKA_GOTO_TIMEOUT = 120_000  # 120 s — government sites are slow on CI
 
-        # Launch headless Chromium with sandbox disabled (required in CI/Docker)
-        browser = await playwright_instance.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--single-process",
-            ],
-        )
+    last_exc: Exception | None = None
 
-        context = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
+    for attempt in range(1, _KARNATAKA_MAX_RETRIES + 1):
+        playwright_instance = None
+        browser = None
+        try:
+            logger.info(f"[Karnataka] Attempt {attempt}/{_KARNATAKA_MAX_RETRIES}")
+            playwright_instance = await async_playwright().start()
+
+            # Launch headless Chromium with sandbox disabled (required in CI/Docker)
+            browser = await playwright_instance.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-setuid-sandbox",
+                    "--disable-extensions",
+                    "--single-process",
+                ],
             )
-        )
-        page = await context.new_page()
 
-        # Navigate to the Karnataka mandi report page
-        await page.goto(
-            "https://krama.karnataka.gov.in/Reports/Main_rep",
-            timeout=60000,
-            wait_until="domcontentloaded",
-        )
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
+            page = await context.new_page()
 
-        # Fill the date input field
-        await page.locator("#_ctl0_MainContent_TxtDate").fill(date_str)
+            # Navigate to the Karnataka mandi report page
+            await page.goto(
+                "https://krama.karnataka.gov.in/Reports/Main_rep",
+                timeout=_KARNATAKA_GOTO_TIMEOUT,
+                wait_until="domcontentloaded",
+            )
 
-        # Select "State Level Daily Report" radio button
-        await page.locator(
-            "input[name='_ctl0:MainContent:RadBtnSel'][value='S']"
-        ).check()
+            # Fill the date input field
+            await page.locator("#_ctl0_MainContent_TxtDate").fill(date_str)
 
-        # Click "View Report" and wait for navigation
-        async with page.expect_navigation(timeout=60000, wait_until="domcontentloaded"):
-            await page.locator("#_ctl0_MainContent_BtnRep").click()
+            # Select "State Level Daily Report" radio button
+            await page.locator(
+                "input[name='_ctl0:MainContent:RadBtnSel'][value='S']"
+            ).check()
 
-        # Click "All" to load all records on one page
-        async with page.expect_navigation(timeout=60000, wait_until="domcontentloaded"):
-            await page.locator("#_ctl0_MainContent_lbtn_all").click()
+            # Click "View Report" and wait for navigation
+            async with page.expect_navigation(
+                timeout=_KARNATAKA_GOTO_TIMEOUT, wait_until="domcontentloaded"
+            ):
+                await page.locator("#_ctl0_MainContent_BtnRep").click()
 
-        html_content = await page.content()
+            # Click "All" to load all records on one page
+            async with page.expect_navigation(
+                timeout=_KARNATAKA_GOTO_TIMEOUT, wait_until="domcontentloaded"
+            ):
+                await page.locator("#_ctl0_MainContent_lbtn_all").click()
 
-        # Parse using the Karnataka-specific HTML parser
-        parsed_data = karnataka_mandi_parser(
-            html_content, filter=False, report_date=date_str
-        )
-        logger.info(f"[Karnataka] Parsed {len(parsed_data)} records for {date_str}")
-        return parsed_data
+            html_content = await page.content()
 
-    except Exception as e:
-        logger.error(
-            f"[Karnataka] Error fetching data for date {date_str}: {e}",
-            exc_info=True,
-        )
-        return {
-            "success": False,
-            "error": "Failed to retrieve or parse Karnataka mandi data.",
-            "details": str(e),
-            "data": [],
-        }
-    finally:
-        # Always clean up browser resources
-        if browser:
-            try:
-                await browser.close()
-            except Exception as close_err:
-                logger.warning(f"[Karnataka] Failed to close browser: {close_err}")
-        if playwright_instance:
-            try:
-                await playwright_instance.stop()
-            except Exception as stop_err:
-                logger.warning(f"[Karnataka] Failed to stop Playwright: {stop_err}")
+            # Parse using the Karnataka-specific HTML parser
+            parsed_data = karnataka_mandi_parser(
+                html_content, filter=False, report_date=date_str
+            )
+            logger.info(f"[Karnataka] Parsed {len(parsed_data)} records for {date_str}")
+            return parsed_data
+
+        except Exception as e:
+            last_exc = e
+            logger.warning(
+                f"[Karnataka] Attempt {attempt}/{_KARNATAKA_MAX_RETRIES} failed: {e}"
+            )
+            if attempt < _KARNATAKA_MAX_RETRIES:
+                await asyncio.sleep(5 * attempt)  # back-off: 5 s, 10 s
+        finally:
+            if browser:
+                try:
+                    await browser.close()
+                except Exception as close_err:
+                    logger.warning(f"[Karnataka] Failed to close browser: {close_err}")
+            if playwright_instance:
+                try:
+                    await playwright_instance.stop()
+                except Exception as stop_err:
+                    logger.warning(f"[Karnataka] Failed to stop Playwright: {stop_err}")
+
+    logger.error(
+        f"[Karnataka] All {_KARNATAKA_MAX_RETRIES} attempts failed for date {date_str}: {last_exc}",
+        exc_info=last_exc,
+    )
+    return {
+        "success": False,
+        "error": "Failed to retrieve or parse Karnataka mandi data.",
+        "details": str(last_exc),
+        "data": [],
+    }
+    # (cleanup is handled inside each attempt's finally block above)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -491,64 +515,86 @@ async def fetch_nagaland_state_daily() -> list[dict] | dict:
     playwright_instance = None
     browser = None
 
-    try:
-        playwright_instance = await async_playwright().start()
+    # Retry the whole Playwright session up to 3 times to handle transient
+    # CI network timeouts that are common when hitting slow external sites.
+    _NAGALAND_MAX_RETRIES = 3
+    _NAGALAND_GOTO_TIMEOUT = 120_000  # 120 s
 
-        browser = await playwright_instance.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--single-process",
-            ],
-        )
+    last_exc: Exception | None = None
 
-        context = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
+    for attempt in range(1, _NAGALAND_MAX_RETRIES + 1):
+        playwright_instance = None
+        browser = None
+        try:
+            logger.info(f"[Nagaland] Attempt {attempt}/{_NAGALAND_MAX_RETRIES}")
+            playwright_instance = await async_playwright().start()
+
+            browser = await playwright_instance.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-setuid-sandbox",
+                    "--disable-extensions",
+                    "--single-process",
+                ],
             )
-        )
-        page = await context.new_page()
 
-        # Navigate to the Nagaland commodity price page
-        await page.goto(
-            _NAGALAND_URL,
-            timeout=60000,
-            wait_until="domcontentloaded",
-        )
-        # Wait for full DOM content to settle
-        await page.wait_for_load_state("domcontentloaded")
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
+            page = await context.new_page()
 
-        html_content = await page.content()
+            # Navigate to the Nagaland commodity price page
+            await page.goto(
+                _NAGALAND_URL,
+                timeout=_NAGALAND_GOTO_TIMEOUT,
+                wait_until="domcontentloaded",
+            )
+            # Wait for full DOM content to settle
+            await page.wait_for_load_state("domcontentloaded")
 
-        # Parse the price table inline (no external parser import needed)
-        data = _nagaland_extract_apmc_prices(html_content)
-        logger.info(f"[Nagaland] Parsed {len(data)} records")
-        return data
+            html_content = await page.content()
 
-    except Exception as e:
-        logger.error(f"[Nagaland] Error fetching APMC prices: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": "Failed to retrieve or parse Nagaland APMC data.",
-            "details": str(e),
-            "data": [],
-        }
-    finally:
-        # Always clean up browser resources
-        if browser:
-            try:
-                await browser.close()
-            except Exception as close_err:
-                logger.warning(f"[Nagaland] Failed to close browser: {close_err}")
-        if playwright_instance:
-            try:
-                await playwright_instance.stop()
-            except Exception as stop_err:
-                logger.warning(f"[Nagaland] Failed to stop Playwright: {stop_err}")
+            # Parse the price table inline (no external parser import needed)
+            data = _nagaland_extract_apmc_prices(html_content)
+            logger.info(f"[Nagaland] Parsed {len(data)} records")
+            return data
+
+        except Exception as e:
+            last_exc = e
+            logger.warning(
+                f"[Nagaland] Attempt {attempt}/{_NAGALAND_MAX_RETRIES} failed: {e}"
+            )
+            if attempt < _NAGALAND_MAX_RETRIES:
+                await asyncio.sleep(5 * attempt)  # back-off: 5 s, 10 s
+        finally:
+            if browser:
+                try:
+                    await browser.close()
+                except Exception as close_err:
+                    logger.warning(f"[Nagaland] Failed to close browser: {close_err}")
+            if playwright_instance:
+                try:
+                    await playwright_instance.stop()
+                except Exception as stop_err:
+                    logger.warning(f"[Nagaland] Failed to stop Playwright: {stop_err}")
+
+    logger.error(
+        f"[Nagaland] All {_NAGALAND_MAX_RETRIES} attempts failed: {last_exc}",
+        exc_info=last_exc,
+    )
+    return {
+        "success": False,
+        "error": "Failed to retrieve or parse Nagaland APMC data.",
+        "details": str(last_exc),
+        "data": [],
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -761,7 +807,8 @@ async def run_all_scrapers(date_str: str = "") -> dict[str, Any]:
     # asyncio.gather captures as an exception) so the whole run is not blocked.
     # Playwright scrapers can be very slow on CI (page load + interaction).
     # 300 s gives the browser time to load even on a congested government site.
-    PLAYWRIGHT_TIMEOUT = 300  # seconds per Playwright scraper
+    # 600 s outer guard — each scraper already retries 3× with 120 s page.goto
+    PLAYWRIGHT_TIMEOUT = 600  # seconds per Playwright scraper
 
     karnataka_task = asyncio.create_task(
         asyncio.wait_for(
