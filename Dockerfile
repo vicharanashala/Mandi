@@ -7,9 +7,8 @@ WORKDIR /app
 # Copy requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-# Install Playwright browsers
-RUN python -m playwright install
-RUN python -m playwright install-deps
+# Install Playwright with Chromium and all required system dependencies
+RUN python -m playwright install --with-deps chromium
 # Copy all your project files
 COPY . .
 

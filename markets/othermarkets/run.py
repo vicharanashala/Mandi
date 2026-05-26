@@ -583,33 +583,67 @@ def punjab_mandi(start_date: str = None, end_date: str = None) -> list[dict]:
     # 0 = all commodities, 34 = Punjab state code, 0 = all mandis
     url = f"https://api.emandikaran-pb.in/CommonMasterDataAPI/getDailyArrival/0/34/0/{start_date}/{end_date}"
 
-    try:
-        logger.info(f"[Punjab] Fetching data from {start_date} to {end_date}")
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+    # The eMandikaran API can be very slow from cloud/CI environments;
+    # use a long timeout with retries so transient latency doesn't drop data.
+    _PUNJAB_TIMEOUT = 300   # seconds — government API is slow from datacenter IPs
+    _PUNJAB_RETRIES = 3
 
-        # Rename 'BranchName' → 'Market' for consistency across all states
-        response_data = [
-            {
-                **{k: v for k, v in item.items() if k != "BranchName"},
-                "Market": item["BranchName"],
-            }
-            for item in data.get("responseData", [])
-        ]
+    for attempt in range(1, _PUNJAB_RETRIES + 1):
+        try:
+            logger.info(
+                f"[Punjab] Fetching {start_date}→{end_date} "
+                f"(attempt {attempt}/{_PUNJAB_RETRIES}, timeout={_PUNJAB_TIMEOUT}s)"
+            )
+            response = requests.get(url, timeout=_PUNJAB_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
 
-        logger.info(f"[Punjab] Fetched {len(response_data)} records")
-        return response_data
+            raw_records = data.get("responseData") or []
+            logger.info(
+                f"[Punjab] Raw responseData length: {len(raw_records)}  "
+                f"| Top-level keys: {list(data.keys())}"
+            )
 
-    except requests.RequestException as e:
-        logger.error(f"[Punjab] Network error: {e}", exc_info=True)
-        return []
-    except json.JSONDecodeError as e:
-        logger.error(f"[Punjab] Failed to parse JSON response: {e}", exc_info=True)
-        return []
-    except Exception as e:
-        logger.error(f"[Punjab] Unexpected error: {e}", exc_info=True)
-        return []
+            if not raw_records:
+                # Log the full response so we can diagnose empty results in CI
+                logger.warning(
+                    f"[Punjab] API returned 0 records — full response: "
+                    f"{str(data)[:500]}"
+                )
+
+            # Rename 'BranchName' → 'Market' for consistency across all states
+            response_data = [
+                {
+                    **{k: v for k, v in item.items() if k != "BranchName"},
+                    "Market": item["BranchName"],
+                }
+                for item in raw_records
+            ]
+
+            logger.info(f"[Punjab] Fetched {len(response_data)} records")
+            return response_data
+
+        except requests.Timeout as e:
+            logger.warning(
+                f"[Punjab] Attempt {attempt}/{_PUNJAB_RETRIES} timed out "
+                f"after {_PUNJAB_TIMEOUT}s: {e}"
+            )
+            if attempt == _PUNJAB_RETRIES:
+                logger.error("[Punjab] All retry attempts timed out — giving up.")
+                return []
+        except requests.RequestException as e:
+            logger.error(f"[Punjab] Network error (attempt {attempt}): {e}", exc_info=True)
+            if attempt == _PUNJAB_RETRIES:
+                return []
+        except json.JSONDecodeError as e:
+            logger.error(f"[Punjab] Failed to parse JSON response: {e}", exc_info=True)
+            return []
+        except Exception as e:
+            logger.error(f"[Punjab] Unexpected error (attempt {attempt}): {e}", exc_info=True)
+            if attempt == _PUNJAB_RETRIES:
+                return []
+
+    return []  # should not be reached
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -725,7 +759,9 @@ async def run_all_scrapers(date_str: str = "") -> dict[str, Any]:
     # Playwright browsers can hang indefinitely on slow/broken pages.
     # asyncio.wait_for cancels the coroutine and raises TimeoutError (which
     # asyncio.gather captures as an exception) so the whole run is not blocked.
-    PLAYWRIGHT_TIMEOUT = 120  # seconds per Playwright scraper
+    # Playwright scrapers can be very slow on CI (page load + interaction).
+    # 300 s gives the browser time to load even on a congested government site.
+    PLAYWRIGHT_TIMEOUT = 300  # seconds per Playwright scraper
 
     karnataka_task = asyncio.create_task(
         asyncio.wait_for(
