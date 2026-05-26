@@ -782,6 +782,19 @@ async def run_all_scrapers(date_str: str = "") -> dict[str, Any]:
                 "error": str(result),
                 "data": None,
             }
+        elif isinstance(result, dict) and not result.get("success", True):
+            # Scraper returned an explicit error dict (e.g. Playwright failure)
+            # instead of raising an exception.  Treat it as a failure so that
+            # normalise_all() never iterates over the error-dict's string keys.
+            logger.error(
+                f"Scraper for {state} returned an error: "
+                f"{result.get('error', 'unknown')} — {result.get('details', '')}"
+            )
+            results[state] = {
+                "success": False,
+                "error": result.get("error", "Scraper returned failure dict"),
+                "data": result.get("data", []),
+            }
         else:
             logger.info(f"✓ {state} — completed successfully")
             results[state] = {"success": True, "data": result}
