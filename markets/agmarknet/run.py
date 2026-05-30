@@ -54,7 +54,23 @@ def _build_state_names() -> dict[int, str]:
         return {}
 
 
+def _build_district_names() -> dict[int, str]:
+    """Build a district_id → lowercase district_name lookup from agmarknet_filters.json."""
+    try:
+        with open(FILTERS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return {
+            d["id"]: d["district_name"].lower()
+            for d in data["data"]["district_data"]
+            if "id" in d and "district_name" in d and d["id"] is not None
+        }
+    except Exception as exc:
+        logger.warning("Could not load district names from agmarknet_filters.json: %s", exc)
+        return {}
+
+
 STATE_NAMES: dict[int, str] = _build_state_names()
+DISTRICT_NAMES: dict[int, str] = _build_district_names()
 
 # Mimic a real browser to avoid nginx-level blocks
 HEADERS = {
@@ -235,12 +251,14 @@ async def fetch_market(
 
     records = _extract_records(payload, market_id)
 
-    # Stamp each record with human-readable market and state (lowercase)
+    # Stamp each record with human-readable market, state, and district (lowercase)
     market_name_lc = market.get("mkt_name", "").lower()
     state_name_lc = STATE_NAMES.get(state_id, "")
+    district_name_lc = DISTRICT_NAMES.get(district_id, "")
     for rec in records:
         rec["market"] = market_name_lc
         rec["state"] = state_name_lc
+        rec["district"] = district_name_lc
 
     # Progress tracking
     counter[0] += 1
