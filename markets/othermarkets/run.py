@@ -106,6 +106,98 @@ async def fetch_karnataka_state_daily(
 
     last_exc: Exception | None = None
 
+    async def goto_with_fallback(page, url: str, initial_timeout: int) -> None:
+        """
+        Navigate to URL with fallback strategy:
+        1. Try domcontentloaded (strict)
+        2. Fall back to load (window.onload)
+        3. Fall back to commit + wait (minimal)
+        """
+        last_error = None
+        
+        # Attempt 1: domcontentloaded
+        try:
+            logger.debug(f"[Karnataka] Navigation attempt 1/3: domcontentloaded (timeout: {initial_timeout}ms)")
+            await page.goto(url, timeout=initial_timeout, wait_until="domcontentloaded")
+            logger.debug("[Karnataka] ✓ domcontentloaded succeeded")
+            return
+        except Exception as e:
+            last_error = e
+            logger.debug(f"[Karnataka] domcontentloaded failed: {type(e).__name__}")
+        
+        # Attempt 2: load (window.onload)
+        try:
+            logger.debug(f"[Karnataka] Navigation attempt 2/3: load (timeout: 60000ms)")
+            await page.goto(url, timeout=60000, wait_until="load")
+            logger.debug("[Karnataka] ✓ load succeeded")
+            return
+        except Exception as e:
+            last_error = e
+            logger.debug(f"[Karnataka] load failed: {type(e).__name__}")
+        
+        # Attempt 3: commit + manual wait
+        try:
+            logger.debug(f"[Karnataka] Navigation attempt 3/3: commit + manual wait")
+            await page.goto(url, timeout=10000, wait_until="commit")
+            # Give page extra time to stabilize
+            await page.wait_for_timeout(3000)
+            logger.debug("[Karnataka] ✓ commit + manual wait succeeded")
+            return
+        except Exception as e:
+            last_error = e
+            logger.debug(f"[Karnataka] commit failed: {type(e).__name__}")
+        
+        # All strategies failed
+        raise last_error or Exception("Navigation failed with all strategies")
+
+    async def expect_navigation_with_fallback(page, timeout: int, action_coro):
+        """
+        Execute action and expect navigation with fallback strategies.
+        Falls back gracefully if domcontentloaded doesn't fire.
+        """
+        last_error = None
+        
+        # Attempt 1: domcontentloaded
+        try:
+            async with page.expect_navigation(timeout=timeout, wait_until="domcontentloaded"):
+                await action_coro()
+            logger.debug("[Karnataka] ✓ Navigation with domcontentloaded succeeded")
+            return
+        except Exception as e:
+            last_error = e
+            logger.debug(f"[Karnataka] Navigation domcontentloaded failed: {type(e).__name__}")
+        
+        # Attempt 2: load
+        try:
+            async with page.expect_navigation(timeout=60000, wait_until="load"):
+                await action_coro()
+            logger.debug("[Karnataka] ✓ Navigation with load succeeded")
+            return
+        except Exception as e:
+            last_error = e
+            logger.debug(f"[Karnataka] Navigation load failed: {type(e).__name__}")
+        
+        # Attempt 3: commit + wait
+        try:
+            async with page.expect_navigation(timeout=10000, wait_until="commit"):
+                await action_coro()
+            await page.wait_for_timeout(2000)
+            logger.debug("[Karnataka] ✓ Navigation with commit succeeded")
+            return
+        except Exception as e:
+            last_error = e
+            logger.debug(f"[Karnataka] Navigation commit failed: {type(e).__name__}")
+        
+        # If all explicit navigation waits fail, just do the action and wait for stability
+        try:
+            logger.debug("[Karnataka] All navigation waits failed, trying action-only approach")
+            await action_coro()
+            await page.wait_for_timeout(3000)  # Simple wait for stability
+            logger.debug("[Karnataka] ✓ Action completed, waited for stability")
+            return
+        except Exception as e:
+            raise e
+
     for attempt in range(1, _KARNATAKA_MAX_RETRIES + 1):
         playwright_instance = None
         browser = None
@@ -123,6 +215,7 @@ async def fetch_karnataka_state_daily(
                     "--disable-setuid-sandbox",
                     "--disable-extensions",
                     "--single-process",
+                    "--disable-blink-features=AutomationControlled",  # Prevent automation detection
                 ],
             )
 
@@ -135,49 +228,60 @@ async def fetch_karnataka_state_daily(
             )
             page = await context.new_page()
 
-            # Navigate to the Karnataka mandi report page
-            await page.goto(
+            # ============ INITIAL PAGE LOAD (with fallback) ============
+            logger.debug(f"[Karnataka] Navigating to main report page for {date_str}...")
+            await goto_with_fallback(
+                page,
                 "https://krama.karnataka.gov.in/Reports/Main_rep",
-                timeout=_KARNATAKA_GOTO_TIMEOUT,
-                wait_until="domcontentloaded",
+                _KARNATAKA_GOTO_TIMEOUT
             )
 
-            # Fill the date input field
+            # ============ FILL FORM FIELDS ============
+            logger.debug("[Karnataka] Filling date field...")
             await page.locator("#_ctl0_MainContent_TxtDate").fill(date_str)
 
-            # Select "State Level Daily Report" radio button
+            logger.debug("[Karnataka] Selecting 'State Level Daily Report'...")
             await page.locator(
                 "input[name='_ctl0:MainContent:RadBtnSel'][value='S']"
             ).check()
 
-            # Click "View Report" and wait for navigation
-            async with page.expect_navigation(
-                timeout=_KARNATAKA_GOTO_TIMEOUT, wait_until="domcontentloaded"
-            ):
-                await page.locator("#_ctl0_MainContent_BtnRep").click()
+            # ============ VIEW REPORT (with fallback navigation) ============
+            logger.debug("[Karnataka] Clicking 'View Report'...")
+            await expect_navigation_with_fallback(
+                page,
+                _KARNATAKA_GOTO_TIMEOUT,
+                page.locator("#_ctl0_MainContent_BtnRep").click()
+            )
 
-            # Click "All" to load all records on one page
-            async with page.expect_navigation(
-                timeout=_KARNATAKA_GOTO_TIMEOUT, wait_until="domcontentloaded"
-            ):
-                await page.locator("#_ctl0_MainContent_lbtn_all").click()
+            # ============ LOAD ALL RECORDS (with fallback navigation) ============
+            logger.debug("[Karnataka] Clicking 'All' to load all records...")
+            await expect_navigation_with_fallback(
+                page,
+                _KARNATAKA_GOTO_TIMEOUT,
+                page.locator("#_ctl0_MainContent_lbtn_all").click()
+            )
 
+            # ============ EXTRACT HTML ============
             html_content = await page.content()
+            logger.debug(f"[Karnataka] Extracted HTML ({len(html_content)} bytes)")
 
+            # ============ PARSE DATA ============
             # Parse using the Karnataka-specific HTML parser
             parsed_data = karnataka_mandi_parser(
                 html_content, filter=False, report_date=date_str
             )
-            logger.info(f"[Karnataka] Parsed {len(parsed_data)} records for {date_str}")
+            logger.info(f"[Karnataka] ✓ SUCCESS: Parsed {len(parsed_data)} records for {date_str}")
             return parsed_data
 
         except Exception as e:
             last_exc = e
             logger.warning(
-                f"[Karnataka] Attempt {attempt}/{_KARNATAKA_MAX_RETRIES} failed: {e}"
+                f"[Karnataka] Attempt {attempt}/{_KARNATAKA_MAX_RETRIES} failed: {type(e).__name__}: {e}"
             )
             if attempt < _KARNATAKA_MAX_RETRIES:
-                await asyncio.sleep(5 * attempt)  # back-off: 5 s, 10 s
+                wait_time = 5 * attempt
+                logger.info(f"[Karnataka] Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)  # back-off: 5 s, 10 s, 15 s
         finally:
             if browser:
                 try:
@@ -191,7 +295,7 @@ async def fetch_karnataka_state_daily(
                     logger.warning(f"[Karnataka] Failed to stop Playwright: {stop_err}")
 
     logger.error(
-        f"[Karnataka] All {_KARNATAKA_MAX_RETRIES} attempts failed for date {date_str}: {last_exc}",
+        f"[Karnataka] All {_KARNATAKA_MAX_RETRIES} attempts failed for date {date_str}: {type(last_exc).__name__}: {last_exc}",
         exc_info=last_exc,
     )
     return {
@@ -200,9 +304,6 @@ async def fetch_karnataka_state_daily(
         "details": str(last_exc),
         "data": [],
     }
-    # (cleanup is handled inside each attempt's finally block above)
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. MAHARASHTRA  (Sync / requests)
 # Source : https://www.msamb.com/ApmcDetail/DataGridBind
