@@ -39,38 +39,41 @@ COLLECTION  = os.getenv("MANDI_COLLECTION")
 # Every document stored in MongoDB will follow this shape:
 #
 #  {
-#    state          : str        – state name (title-case)
-#    district       : str|None   – district when available
-#    market         : str        – market / mandi name (upper)
-#    date           : datetime   – UTC midnight of the price date
-#    commodity      : str        – commodity name (upper)
-#    variety        : str|None   – variety / grade detail
-#    grade          : str|None   – FAQ / Medium / etc.
-#    unit           : str|None   – Quintal / Kg / etc.
-#    arrival_qty    : float|None – arrival quantity in that unit
-#    min_price      : float|None – minimum price (₹)
-#    max_price      : float|None – maximum price (₹)
-#    modal_price    : float|None – modal / average price (₹)
-#    wholesale_rate : float|None – wholesale rate when given separately
-#    retail_price   : float|None – retail price when given separately
-#    source_state   : str        – original key in raw data
-#    ingested_at    : datetime   – UTC timestamp of this upload
+#    source_system    : str        – source identifier (e.g. 'agmarknet')
+#    state            : str        – state name (lower-case)
+#    date             : datetime   – UTC midnight of the price date
+#    market_name      : str|None   – market / mandi name (lower-case)
+#    market_id        : str|None   – unique market ID
+#    commodity_id     : str|None   – unique commodity ID
+#    commodity_group  : str|None   – commodity group (e.g. 'cereals')
+#    commodity_name   : str        – commodity name (lower-case)
+#    variety          : str|None   – variety / grade detail
+#    grade            : str|None   – FAQ / Medium / etc.
+#    arrival_quantity : float|None – arrival quantity
+#    min_price        : float|None – minimum price (₹)
+#    max_price        : float|None – maximum price (₹)
+#    modal_price      : float|None – modal / average price (₹)
+#    source_url       : str        – URL of data source
+#    source_name      : str        – name of data source
+#    method           : str        – scraping method used
+#    source_state     : str        – original state key in raw data
+#    ingested_at      : datetime   – UTC timestamp of this upload
 #  }
 #
-#  Unique index : (state, market, commodity, variety, date)
+#  Unique index : (state, market_name, commodity_name, variety, date)
 
 
 # ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
 
-def _parse_date(raw: str) -> str | None:
-    """Parse DD/MM/YYYY or any common date string → YYYY-MM-DD string."""
+def _parse_date(raw: str) -> datetime | None:
+    """Parse DD/MM/YYYY or any common date string → UTC midnight datetime."""
     if not raw:
         return None
     try:
         dt = date_parser.parse(str(raw), dayfirst=True)
-        return dt.strftime("%Y-%m-%d")
+        return dt.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
     except Exception:
         return None
 
@@ -123,31 +126,23 @@ def _norm_karnataka(record: dict, state: str) -> dict:
     Source: https://krama.karnataka.gov.in  (web scraper)
     """
     return dict(
-        state          = state.lower(),
-        district       = None,                              # not provided by source
-        market         = _lower(record.get("Market")),
-        date           = _parse_date(record.get("Date")),
-        commodity      = _lower(record.get("Commodity")),
-        commodity_group= None,                              # not provided by source
-        variety        = _lower(record.get("Variety")),
-        grade          = _lower(record.get("Grade")),
-        unit           = _lower(record.get("Unit")),
-        arrival_qty    = _to_float(record.get("Arrival")),
-        min_price      = _to_float(record.get("Min")),
-        max_price      = _to_float(record.get("Max")),
-        modal_price    = _to_float(record.get("Modal")),
-        wholesale_rate = None,                              # not provided by source
-        retail_price   = None,                              # not provided by source
-        as_on_price    = None,
-        msp_price      = None,
-        trend          = None,
-        one_day_ago_price   = None,
-        two_day_ago_price   = None,
-        one_day_ago_arrival = None,
-        two_day_ago_arrival = None,
-        source_url     = sources["karnataka"]["url"],
-        method         = sources["karnataka"]["method"],
-        source_name    = sources["karnataka"]["source_name"],
+        source_system    = "krama",
+        state            = state.lower(),
+        date             = _parse_date(record.get("Date")),
+        market_name      = _lower(record.get("Market")),
+        market_id        = None,
+        commodity_id     = None,
+        commodity_group  = _lower(record.get("Group")),
+        commodity_name   = _lower(record.get("Commodity")),
+        variety          = _lower(record.get("Variety")),
+        grade            = _lower(record.get("Grade")),
+        arrival_quantity = _to_float(record.get("Arrival")),
+        min_price        = _to_float(record.get("Min")),
+        max_price        = _to_float(record.get("Max")),
+        modal_price      = _to_float(record.get("Modal")),
+        source_url       = sources["karnataka"]["url"],
+        method           = sources["karnataka"]["method"],
+        source_name      = sources["karnataka"]["source_name"],
     )
 
 
@@ -170,31 +165,23 @@ def _norm_meghalaya(record: dict, state: str) -> dict:
     Source: https://megamb.gov.in  (web scraper)
     """
     return dict(
-        state          = state.lower(),
-        district       = None,                                          # not provided by source
-        market         = _lower(record.get("market")),
-        date           = _parse_date(record.get("date")),
-        commodity      = _lower(record.get("commodity_name")),
-        commodity_group= None,                                          # not provided by source
-        variety        = _lower(record.get("variety")),
-        grade          = _lower(record.get("grade")),
-        unit           = _lower(record.get("Unit")),                    # key is Title-case in source
-        arrival_qty    = _to_float(record.get("arrival_quintals")),
-        min_price      = _to_float(record.get("min_price_rs_per_quintal")),
-        max_price      = _to_float(record.get("max_price_rs_per_quintal")),
-        modal_price    = _to_float(record.get("Modal")),                # key is Title-case in source
-        wholesale_rate = None,                                          # not provided by source
-        retail_price   = None,                                          # not provided by source
-        as_on_price    = None,
-        msp_price      = None,
-        trend          = None,
-        one_day_ago_price   = None,
-        two_day_ago_price   = None,
-        one_day_ago_arrival = None,
-        two_day_ago_arrival = None,
-        source_url     = sources["meghalaya"]["url"],
-        method         = sources["meghalaya"]["method"],
-        source_name    = sources["meghalaya"]["source_name"],
+        source_system    = "megamb",
+        state            = state.lower(),
+        date             = _parse_date(record.get("date")),
+        market_name      = _lower(record.get("market")),
+        market_id        = None,
+        commodity_id     = None,
+        commodity_group  = _lower(record.get("Group Name")),
+        commodity_name   = _lower(record.get("commodity_name")),
+        variety          = _lower(record.get("Variety")),
+        grade            = _lower(record.get("Grade")),
+        arrival_quantity = _to_float(record.get("arrival_quintals")),
+        min_price        = _to_float(record.get("min_price_rs_per_quintal")),
+        max_price        = _to_float(record.get("max_price_rs_per_quintal")),
+        modal_price      = _to_float(record.get("Modal")),
+        source_url       = sources["meghalaya"]["url"],
+        method           = sources["meghalaya"]["method"],
+        source_name      = sources["meghalaya"]["source_name"],
     )
 
 
@@ -220,31 +207,23 @@ def _norm_nagaland(record: dict, state: str) -> dict:
     Source: https://www.commodityonline.com  (web scraper)
     """
     return dict(
-        state          = state.lower(),
-        district       = _lower(record.get("District")),
-        market         = _lower(record.get("Market")),
-        date           = _parse_date(record.get("Arrival Date")),
-        commodity      = _lower(record.get("Commodity")),
-        commodity_group= None,                              # not provided by source
-        variety        = _lower(record.get("Variety")),
-        grade          = None,                              # not provided by source
-        unit           = "quintal",                         # implied; not stated in raw record
-        arrival_qty    = None,                              # not provided by source
-        min_price      = _to_float(record.get("Min Price")),
-        max_price      = _to_float(record.get("Max Price")),
-        modal_price    = _to_float(record.get("Avg price")),
-        wholesale_rate = None,                              # not provided by source
-        retail_price   = None,                              # not provided by source
-        as_on_price    = None,
-        msp_price      = None,
-        trend          = None,
-        one_day_ago_price   = None,
-        two_day_ago_price   = None,
-        one_day_ago_arrival = None,
-        two_day_ago_arrival = None,
-        source_url     = sources["nagaland"]["url"],
-        method         = sources["nagaland"]["method"],
-        source_name    = sources["nagaland"]["source_name"],
+        source_system    = "commodity_online",
+        state            = state.lower(),
+        date             = _parse_date(record.get("Arrival Date")),
+        market_name      = _lower(record.get("Market")),
+        market_id        = None,
+        commodity_id     = None,
+        commodity_group  = None,
+        commodity_name   = _lower(record.get("Commodity")),
+        variety          = _lower(record.get("Variety")),
+        grade            = None,
+        arrival_quantity = None,
+        min_price        = _to_float(record.get("Min Price")),
+        max_price        = _to_float(record.get("Max Price")),
+        modal_price      = _to_float(record.get("Avg price")),
+        source_url       = sources["nagaland"]["url"],
+        method           = sources["nagaland"]["method"],
+        source_name      = sources["nagaland"]["source_name"],
     )
 
 
@@ -270,31 +249,23 @@ def _norm_maharashtra(record: dict, state: str) -> dict:
     Source: https://www.msamb.com  (external API)
     """
     return dict(
-        state          = state.lower(),
-        district       = None,                              # not provided by source
-        market         = _lower(record.get("Market")),      # key is Title-case in source
-        date           = _parse_date(record.get("date")),
-        commodity      = _lower(record.get("commodity")),
-        commodity_group= None,                              # not provided by source
-        variety        = _lower(record.get("variety")),
-        grade          = None,                              # not provided by source
-        unit           = _lower(record.get("unit")),
-        arrival_qty    = _to_float(record.get("arrival")),
-        min_price      = _to_float(record.get("min_price")),
-        max_price      = _to_float(record.get("max_price")),
-        modal_price    = _to_float(record.get("modal_price")),
-        wholesale_rate = None,                              # not provided by source
-        retail_price   = None,                              # not provided by source
-        as_on_price    = None,
-        msp_price      = None,
-        trend          = None,
-        one_day_ago_price   = None,
-        two_day_ago_price   = None,
-        one_day_ago_arrival = None,
-        two_day_ago_arrival = None,
-        source_url     = sources["maharashtra"]["url"],
-        method         = sources["maharashtra"]["method"],
-        source_name    = sources["maharashtra"]["source_name"],
+        source_system    = "msamb",
+        state            = state.lower(),
+        date             = _parse_date(record.get("date")),
+        market_name      = _lower(record.get("Market")),      # key is Title-case in source
+        market_id        = None,
+        commodity_id     = None,
+        commodity_group  = None,
+        commodity_name   = _lower(record.get("commodity")),
+        variety          = _lower(record.get("variety")),
+        grade            = None,
+        arrival_quantity = _to_float(record.get("arrival")),
+        min_price        = _to_float(record.get("min_price")),
+        max_price        = _to_float(record.get("max_price")),
+        modal_price      = _to_float(record.get("modal_price")),
+        source_url       = sources["maharashtra"]["url"],
+        method           = sources["maharashtra"]["method"],
+        source_name      = sources["maharashtra"]["source_name"],
     )
 
 
@@ -319,31 +290,23 @@ def _norm_uttar_pradesh(record: dict, state: str) -> dict:
     Source: https://upmandiprices.in  (external API)
     """
     return dict(
-        state          = state.lower(),
-        district       = None,                                  # not provided by source
-        market         = _lower(record.get("Market")),
-        date           = _parse_date(record.get("Date")),
-        commodity      = _lower(record.get("Commodity")),
-        commodity_group= None,                                  # not provided by source
-        variety        = None,                                  # not provided by source
-        grade          = None,                                  # not provided by source
-        unit           = "quintal",                             # implied; not stated in raw record
-        arrival_qty    = _to_float(record.get("arrival")),      # key is lowercase in source
-        min_price      = None,                                  # not provided; use wholesale_rate
-        max_price      = None,                                  # not provided; use wholesale_rate
-        modal_price    = None,                                  # not provided; use wholesale_rate
-        wholesale_rate = _to_float(record.get("Wholesale_rate")),
-        retail_price   = _to_float(record.get("Retail_price")),
-        as_on_price    = None,
-        msp_price      = None,
-        trend          = None,
-        one_day_ago_price   = None,
-        two_day_ago_price   = None,
-        one_day_ago_arrival = None,
-        two_day_ago_arrival = None,
-        source_url     = sources["uttar_pradesh"]["url"],
-        method         = sources["uttar_pradesh"]["method"],
-        source_name    = sources["uttar_pradesh"]["source_name"],
+        source_system    = "up_krishi",
+        state            = state.lower(),
+        date             = _parse_date(record.get("Date")),
+        market_name      = None,                                # not provided by source
+        market_id        = None,
+        commodity_id     = None,
+        commodity_group  = _lower(record.get("MainProductName")),
+        commodity_name   = _lower(record.get("ProductName")),
+        variety          = None,
+        grade            = None,
+        arrival_quantity = _to_float(record.get("aavakRate")),
+        min_price        = None,
+        max_price        = None,
+        modal_price      = None,
+        source_url       = sources["uttar_pradesh"]["url"],
+        method           = sources["uttar_pradesh"]["method"],
+        source_name      = sources["uttar_pradesh"]["source_name"],
     )
 
 
@@ -369,31 +332,23 @@ def _norm_punjab(record: dict, state: str) -> dict:
     Source: https://emandikaran-pb.in  (external API)
     """
     return dict(
-        state          = state.lower(),
-        district       = _lower(record.get("DistrictName")),
-        market         = _lower(record.get("Market")),
-        date           = _parse_date(record.get("EntryDate")),
-        commodity      = _lower(record.get("CommodityName")),
-        commodity_group= None,                                  # not provided by source
-        variety        = None,                                  # not provided by source
-        grade          = None,                                  # not provided by source
-        unit           = "quintal",                             # implied; not stated in raw record
-        arrival_qty    = _to_float(record.get("Quantity")),
-        min_price      = _to_float(record.get("Minprice")),     # note: lowercase 'p' in source
-        max_price      = _to_float(record.get("MaxPrice")),
-        modal_price    = _to_float(record.get("ModalPrice")),
-        wholesale_rate = None,                                  # not provided by source
-        retail_price   = None,                                  # not provided by source
-        as_on_price    = None,
-        msp_price      = None,
-        trend          = None,
-        one_day_ago_price   = None,
-        two_day_ago_price   = None,
-        one_day_ago_arrival = None,
-        two_day_ago_arrival = None,
-        source_url     = sources["punjab"]["url"],
-        method         = sources["punjab"]["method"],
-        source_name    = sources["punjab"]["source_name"],
+        source_system    = "emandikaran",
+        state            = state.lower(),
+        date             = _parse_date(record.get("EntryDate")),
+        market_name      = _lower(record.get("BranchName")),
+        market_id        = None,
+        commodity_id     = None,
+        commodity_group  = None,
+        commodity_name   = _lower(record.get("CommodityName")),
+        variety          = None,
+        grade            = None,
+        arrival_quantity = _to_float(record.get("Quantity")),
+        min_price        = _to_float(record.get("Minprice")),     # note: lowercase 'p' in source
+        max_price        = _to_float(record.get("MaxPrice")),
+        modal_price      = _to_float(record.get("ModalPrice")),
+        source_url       = sources["punjab"]["url"],
+        method           = sources["punjab"]["method"],
+        source_name      = sources["punjab"]["source_name"],
     )
 
 def _norm_agmarknet(record: dict, state: str) -> dict:
@@ -419,31 +374,23 @@ def _norm_agmarknet(record: dict, state: str) -> dict:
     record_state = record.get("state") or state
 
     return dict(
-        state                = _lower(record_state),
-        district             = None,
-        market               = _lower(record.get("market")),        # lowercase key
-        date                 = _parse_date(record.get("reported_date")),
-        commodity            = _lower(record.get("cmdt_name")),
-        commodity_group      = _lower(record.get("cmdt_grp_name")), # e.g. "cereals"
-        variety              = None,
-        grade                = None,
-        unit                 = "quintal",
-        arrival_qty          = _to_float(record.get("as_on_arrival")),
-        min_price            = None,
-        max_price            = None,
-        modal_price          = None,
-        wholesale_rate       = None,
-        retail_price         = None,
-        as_on_price          = _to_float(record.get("as_on_price")),
-        msp_price            = _to_float(record.get("msp_price")),
-        trend                = _lower(record.get("trend")),
-        one_day_ago_price    = _to_float(record.get("one_day_ago_price")),
-        two_day_ago_price    = _to_float(record.get("two_day_ago_price")),
-        one_day_ago_arrival  = _to_float(record.get("one_day_ago_arrival")),
-        two_day_ago_arrival  = _to_float(record.get("two_day_ago_arrival")),
-        source_url           = sources["agmarknet"]["url"],
-        method               = sources["agmarknet"]["method"],
-        source_name          = sources["agmarknet"]["source_name"]
+        source_system    = "agmarknet",
+        state            = _lower(record_state),
+        date             = _parse_date(record.get("reported_date")),
+        market_name      = _lower(record.get("market")),        # lowercase key
+        market_id        = None,
+        commodity_id     = None,
+        commodity_group  = _lower(record.get("cmdt_grp_name")), # e.g. "cereals"
+        commodity_name   = _lower(record.get("cmdt_name")),
+        variety          = None,
+        grade            = None,
+        arrival_quantity = _to_float(record.get("as_on_arrival")),
+        min_price        = None,
+        max_price        = None,
+        modal_price      = _to_float(record.get("as_on_price")),  # as_on_price is the modal price
+        source_url       = sources["agmarknet"]["url"],
+        method           = sources["agmarknet"]["method"],
+        source_name      = sources["agmarknet"]["source_name"],
     )
 
 
@@ -465,33 +412,24 @@ STATE_NORMALISERS = {
 # ─────────────────────────────────────────────
 
 UNIFIED_KEYS = [
-    # ── identity ──────────────────────────────────
+    # ── source & identity ─────────────────────────
+    "source_system",
     "state",
-    "district",
-    "market",
     "date",
+    # ── market ────────────────────────────────────
+    "market_name",
+    "market_id",
     # ── commodity ─────────────────────────────────
-    "commodity",
-    "commodity_group",      # agmarknet: e.g. "cereals"
+    "commodity_id",
+    "commodity_group",
+    "commodity_name",
     "variety",
     "grade",
-    "unit",
-    # ── quantity ──────────────────────────────────
-    "arrival_qty",
-    # ── prices ────────────────────────────────────
+    # ── quantity & prices ─────────────────────────
+    "arrival_quantity",
     "min_price",
     "max_price",
     "modal_price",
-    "wholesale_rate",
-    "retail_price",
-    "as_on_price",          # agmarknet: current price
-    "msp_price",            # agmarknet: minimum support price
-    "trend",                # agmarknet: "up" / "down" / "stable"
-    # ── historical (agmarknet) ────────────────────
-    "one_day_ago_price",
-    "two_day_ago_price",
-    "one_day_ago_arrival",
-    "two_day_ago_arrival",
     # ── provenance ────────────────────────────────
     "source_url",
     "source_name",
@@ -542,19 +480,19 @@ def ensure_indexes(collection) -> None:
     """Create indexes for fast querying and upsert matching."""
     collection.create_index(
         [
-            ("state",     ASCENDING),
-            ("market",    ASCENDING),
-            ("commodity", ASCENDING),
-            ("variety",   ASCENDING),
-            ("date",      ASCENDING),
+            ("state",          ASCENDING),
+            ("market_name",    ASCENDING),
+            ("commodity_name", ASCENDING),
+            ("variety",        ASCENDING),
+            ("date",           ASCENDING),
         ],
         unique=True,
         name="unique_price_entry",
         background=True,
     )
-    collection.create_index([("date", ASCENDING)],      name="idx_date")
-    collection.create_index([("state", ASCENDING)],     name="idx_state")
-    collection.create_index([("commodity", ASCENDING)], name="idx_commodity")
+    collection.create_index([("date",           ASCENDING)], name="idx_date")
+    collection.create_index([("state",          ASCENDING)], name="idx_state")
+    collection.create_index([("commodity_name", ASCENDING)], name="idx_commodity")
     print("[INFO] Indexes ensured.")
 
 
@@ -597,15 +535,15 @@ def upload_to_mongo(documents: list[dict],
         # Lower-case every string field before writing
         doc = _lowercase_doc(doc)
 
-        # Dedup key: commodity AND apmc (market) AND date — all three must match
-        commodity_lc = (doc.get("commodity") or "").strip().lower() or None
-        market_lc    = (doc.get("market")    or "").strip().lower() or None
+        # Dedup key: commodity_name AND market_name AND date — all three must match
+        commodity_lc = (doc.get("commodity_name") or "").strip().lower() or None
+        market_lc    = (doc.get("market_name")    or "").strip().lower() or None
         date_val     = doc.get("date")   # already a YYYY-MM-DD string or None
 
         filter_key = {
-            "commodity": commodity_lc,   # AND
-            "market":    market_lc,      # AND
-            "date":      date_val,       # AND
+            "commodity_name": commodity_lc,   # AND
+            "market_name":    market_lc,      # AND
+            "date":           date_val,       # AND
         }
         ops.append(ReplaceOne(filter_key, doc, upsert=True))
 
