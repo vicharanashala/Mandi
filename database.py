@@ -20,7 +20,7 @@ import re
 from datetime import datetime, timezone
 from dateutil import parser as date_parser
 from pymongo import MongoClient, ReplaceOne, ASCENDING
-from pymongo.errors import BulkWriteError
+from pymongo.errors import BulkWriteError, OperationFailure
 from dotenv import load_dotenv
 import json
 load_dotenv()
@@ -31,7 +31,7 @@ from utils.sources import sources
 MONGO_URI   = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME     = os.getenv("MANDI_DB_NAME").strip()
 COLLECTION  = os.getenv("MANDI_COLLECTION")
-
+# FOr Commodity
 
 # ─────────────────────────────────────────────
 # UNIFIED SCHEMA
@@ -131,7 +131,7 @@ def _norm_karnataka(record: dict, state: str) -> dict:
         date             = _parse_date(record.get("Date")),
         market_name      = _lower(record.get("Market")),
         market_id        = None,
-        commodity_id     = None,
+        commodity_id     = get_commodity_id(_lower(record.get("Commodity"))),
         commodity_group  = _lower(record.get("Group")),
         commodity_name   = _lower(record.get("Commodity")),
         variety          = _lower(record.get("Variety")),
@@ -170,7 +170,7 @@ def _norm_meghalaya(record: dict, state: str) -> dict:
         date             = _parse_date(record.get("date")),
         market_name      = _lower(record.get("market")),
         market_id        = None,
-        commodity_id     = None,
+        commodity_id     = get_commodity_id(_lower(record.get("commodity_name"))),
         commodity_group  = _lower(record.get("Group Name")),
         commodity_name   = _lower(record.get("commodity_name")),
         variety          = _lower(record.get("Variety")),
@@ -212,7 +212,7 @@ def _norm_nagaland(record: dict, state: str) -> dict:
         date             = _parse_date(record.get("Arrival Date")),
         market_name      = _lower(record.get("Market")),
         market_id        = None,
-        commodity_id     = None,
+        commodity_id     = get_commodity_id(_lower(record.get("commodity_name"))),
         commodity_group  = None,
         commodity_name   = _lower(record.get("Commodity")),
         variety          = _lower(record.get("Variety")),
@@ -254,7 +254,7 @@ def _norm_maharashtra(record: dict, state: str) -> dict:
         date             = _parse_date(record.get("date")),
         market_name      = _lower(record.get("Market")),      # key is Title-case in source
         market_id        = None,
-        commodity_id     = None,
+        commodity_id     = get_commodity_id(_lower(record.get("commodity"))),
         commodity_group  = None,
         commodity_name   = _lower(record.get("commodity")),
         variety          = _lower(record.get("variety")),
@@ -295,7 +295,7 @@ def _norm_uttar_pradesh(record: dict, state: str) -> dict:
         date             = _parse_date(record.get("Date")),
         market_name      = None,                                # not provided by source
         market_id        = None,
-        commodity_id     = None,
+        commodity_id     = get_commodity_id(_lower(record.get("ProductName"))),
         commodity_group  = _lower(record.get("MainProductName")),
         commodity_name   = _lower(record.get("ProductName")),
         variety          = None,
@@ -337,7 +337,7 @@ def _norm_punjab(record: dict, state: str) -> dict:
         date             = _parse_date(record.get("EntryDate")),
         market_name      = _lower(record.get("BranchName")),
         market_id        = None,
-        commodity_id     = None,
+        commodity_id     = get_commodity_id(_lower(record.get("CommodityName"))),
         commodity_group  = None,
         commodity_name   = _lower(record.get("CommodityName")),
         variety          = None,
@@ -379,7 +379,7 @@ def _norm_agmarknet(record: dict, state: str) -> dict:
         date             = _parse_date(record.get("reported_date")),
         market_name      = _lower(record.get("market")),        # lowercase key
         market_id        = None,
-        commodity_id     = None,
+        commodity_id     = get_commodity_id(_lower(record.get("cmdt_name"))),
         commodity_group  = _lower(record.get("cmdt_grp_name")), # e.g. "cereals"
         commodity_name   = _lower(record.get("cmdt_name")),
         variety          = None,
@@ -476,10 +476,42 @@ def normalise_all(raw_data: dict) -> list[dict]:
     return documents
 
 
+def _create_index_safe(collection, keys, **kwargs) -> None:
+    """Create an index, silently skipping if the name already exists."""
+    name = kwargs.get("name", "<unnamed>")
+    try:
+        collection.create_index(keys, **kwargs)
+    except OperationFailure as exc:
+        # Code 85 = IndexOptionsConflict, 86 = IndexKeySpecsConflict.
+        # Both mean the index (or its name) already exists — safe to ignore.
+        print(f"[INFO] Index '{name}' already exists, skipping: {exc}")
+
+
 def ensure_indexes(collection) -> None:
-    """Create indexes for fast querying and upsert matching."""
-    collection.create_index(
+    """
+    Create indexes for fast querying and upsert matching.
+
+    Drops stale indexes whose key patterns no longer match the current schema
+    (e.g. old ``market``/``commodity`` field names) before recreating them.
+    """
+    try:
+        existing = collection.index_information()
+
+        # ── Drop stale unique_price_entry if its key pattern is wrong ─────────
+        if "unique_price_entry" in existing:
+            old_keys = {k for k, _ in existing["unique_price_entry"].get("key", [])}
+            expected = {"source_system", "state", "market_name", "commodity_name", "variety", "date"}
+            if old_keys != expected:
+                collection.drop_index("unique_price_entry")
+                print("[INFO] Dropped stale 'unique_price_entry' index (wrong field names).")
+    except Exception as exc:
+        print(f"[WARN] Could not inspect/drop old index: {exc}")
+
+    # ── Recreate with correct fields ──────────────────────────────────────────
+    _create_index_safe(
+        collection,
         [
+            ("source_system",  ASCENDING),
             ("state",          ASCENDING),
             ("market_name",    ASCENDING),
             ("commodity_name", ASCENDING),
@@ -488,11 +520,10 @@ def ensure_indexes(collection) -> None:
         ],
         unique=True,
         name="unique_price_entry",
-        background=True,
     )
-    collection.create_index([("date",           ASCENDING)], name="idx_date")
-    collection.create_index([("state",          ASCENDING)], name="idx_state")
-    collection.create_index([("commodity_name", ASCENDING)], name="idx_commodity")
+    _create_index_safe(collection, [("date",           ASCENDING)], name="idx_date")
+    _create_index_safe(collection, [("state",          ASCENDING)], name="idx_state")
+    _create_index_safe(collection, [("commodity_name", ASCENDING)], name="idx_commodity")
     print("[INFO] Indexes ensured.")
 
 
@@ -531,21 +562,44 @@ def upload_to_mongo(documents: list[dict],
     # a record is skipped/updated only when ALL three fields match an existing
     # document.  Any other combination results in a fresh insert.
     ops = []
+    skipped = 0
     for doc in documents:
         # Lower-case every string field before writing
         doc = _lowercase_doc(doc)
 
-        # Dedup key: commodity_name AND market_name AND date — all three must match
-        commodity_lc = (doc.get("commodity_name") or "").strip().lower() or None
-        market_lc    = (doc.get("market_name")    or "").strip().lower() or None
-        date_val     = doc.get("date")   # already a YYYY-MM-DD string or None
+        commodity_lc     = (doc.get("commodity_name") or "").strip().lower() or None
+        market_lc        = (doc.get("market_name")    or "").strip().lower() or None
+        state_lc         = (doc.get("state")         or "").strip().lower() or None
+        source_system_lc = (doc.get("source_system") or "").strip().lower() or None
+        variety_lc       = (doc.get("variety")       or "").strip().lower() or None
+
+        # Normalise date: store as "YYYY-MM-DD" string for consistent index matching.
+        # _parse_date returns a datetime object; convert to ISO date string here.
+        raw_date = doc.get("date")
+        if isinstance(raw_date, datetime):
+            date_str = raw_date.strftime("%Y-%m-%d")
+            doc["date"] = date_str   # store as string in the document too
+        else:
+            date_str = str(raw_date) if raw_date else None
+
+        # Skip degenerate records where all unique-key fields are null —
+        # they would all map to the same index slot and cause E11000 errors.
+        if not any([source_system_lc, market_lc, commodity_lc, variety_lc, date_str]):
+            skipped += 1
+            continue
 
         filter_key = {
-            "commodity_name": commodity_lc,   # AND
-            "market_name":    market_lc,      # AND
-            "date":           date_val,       # AND
+            "source_system":  source_system_lc,  # AND – different feeds never collide
+            "state":          state_lc,          # AND – same commodity across states
+            "market_name":    market_lc,         # AND
+            "commodity_name": commodity_lc,      # AND
+            "variety":        variety_lc,        # AND – same commodity, different variety
+            "date":           date_str,          # AND – normalised to YYYY-MM-DD string
         }
         ops.append(ReplaceOne(filter_key, doc, upsert=True))
+
+    if skipped:
+        print(f"[WARN] Skipped {skipped} degenerate record(s) with all-null index fields.")
 
     try:
         result = coll.bulk_write(ops, ordered=False)
@@ -560,6 +614,115 @@ def upload_to_mongo(documents: list[dict],
     finally:
         client.close()
         print("[INFO] Connection closed.")
+
+
+# ─────────────────────────────────────────────
+# COMMODITY LOOKUP  (singleton client + cache)
+# ─────────────────────────────────────────────
+
+# Module-level MongoClient for the commodity alias lookup database.
+# MongoClient manages an internal connection pool; create it once and
+# reuse it for the lifetime of the process.
+_lookup_client: MongoClient | None = None
+_lookup_coll = None
+
+# Simple in-memory cache  { normalised_name -> crop_master_id | None }
+# Avoids a DB round-trip when the same commodity appears across many records.
+_commodity_id_cache: dict[str, str | None] = {}
+
+
+def _get_lookup_collection(
+    uri: str       = MONGO_URI,
+    db_name: str   = DB_NAME,
+    coll_name: str = "commodity_alias_lookup",
+):
+    """Return the cached commodity lookup collection, initialising once if needed.
+
+    Returns ``None`` (instead of raising) when any of the required env vars
+    are missing or not a non-empty string — commodity_id lookups will then
+    simply return ``None`` without crashing the normalisation pipeline.
+    """
+    global _lookup_client, _lookup_coll
+    # ── Guard: all three params must be non-empty strings ─────────────
+    if not (isinstance(uri, str) and uri.strip() and
+            isinstance(db_name, str) and db_name.strip() and
+            isinstance(coll_name, str) and coll_name.strip()):
+        print("[WARN] Commodity alias lookup DB not configured — lookups disabled.")
+        return None
+    if _lookup_coll is None:
+        _lookup_client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        _lookup_coll   = _lookup_client[db_name][coll_name]
+        print("[INFO] Commodity alias lookup client connected.")
+    return _lookup_coll
+
+
+def get_commodity_id(commodity_name: str) -> str | None:
+    """
+    Look up the ``crop_master_id`` for *commodity_name* using a single
+    persistent MongoDB connection (connection pool) + an in-memory cache.
+
+    Matching strategy
+    -----------------
+    1. Normalise the input to lower-case and check the in-memory cache
+       first — no DB hit if the same commodity was already resolved.
+    2. Look up the normalized commodity name in the ``aliases`` array
+       where ``crop_master_id`` is non-null.
+    3. If that fails, perform a case-insensitive regex match on ``aliases``
+       with a non-null ``crop_master_id``.
+    4. Cache the result (even ``None``) so repeated calls are O(1).
+
+    Returns
+    -------
+    str | None
+        The ``crop_master_id``, or ``None`` if no match / no id found.
+    """
+    if not isinstance(commodity_name, str) or not commodity_name.strip():
+        return None
+
+    key = commodity_name.strip().lower()
+
+    # ── Cache hit ──────────────────────────────────────────────────────
+    if key in _commodity_id_cache:
+        return _commodity_id_cache[key]
+
+    # ── DB lookup ──────────────────────────────────────────────────────
+    try:
+        coll = _get_lookup_collection()
+        if coll is None:
+            # Lookup DB not configured; cache None to skip future lookups
+            _commodity_id_cache[key] = None
+            return None
+
+        # 1. Exact match on aliases array
+        doc = coll.find_one(
+            {
+                "aliases": key,
+                "crop_master_id": {"$nin": [None, ""]},
+            },
+            projection={"crop_master_id": 1, "_id": 0},
+        )
+        if doc:
+            result = doc["crop_master_id"]
+            _commodity_id_cache[key] = result
+            return result
+
+        # 2. Fallback: regex search on aliases array
+        pattern = re.compile(re.escape(key), re.IGNORECASE)
+        fallback = coll.find_one(
+            {
+                "aliases": {"$regex": pattern},
+                "crop_master_id": {"$nin": [None, ""]},
+            },
+            projection={"crop_master_id": 1, "_id": 0},
+        )
+        result = fallback.get("crop_master_id") if fallback else None
+        _commodity_id_cache[key] = result   # cache None too — avoids re-querying
+        return result
+    except Exception as exc:
+        # Never let a lookup failure crash the normalisation pipeline.
+        print(f"[WARN] crop_master_id lookup failed for '{key}': {exc}")
+        _commodity_id_cache[key] = None
+        return None
 
 
 

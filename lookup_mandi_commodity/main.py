@@ -257,7 +257,7 @@ def main():
     # parser.add_argument("--sheet", default=None, help="Sheet name (default: first sheet)")
     args = parser.parse_args()
 
-    uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+    uri = os.getenv("MONGO_URI_ANNAM", "mongodb://localhost:27017")
 
     # 1. Read xlsx
     print(f"📂 Reading: {args.file}")
