@@ -7012,21 +7012,21 @@
         "both": {
           "id": 100006,
           "note": "You can only select dates within 1 year.",
-          "to_date": "2026-06-27",
+          "to_date": "2026-06-29",
           "from_date": "2025-11-07",
           "allowed_year_range": 1
         },
         "price": {
           "id": 100004,
           "note": "You can only select dates within 1 year.",
-          "to_date": "2026-06-27",
+          "to_date": "2026-06-29",
           "from_date": "2021-01-01",
           "allowed_year_range": 1
         },
         "arrival": {
           "id": 100005,
           "note": "You can only select dates within 1 year.",
-          "to_date": "2026-06-27",
+          "to_date": "2026-06-29",
           "from_date": "2021-01-01",
           "allowed_year_range": 1
         }
@@ -9224,16 +9224,16 @@
         "district_id": 596
       },
       {
-        "id": 2392,
-        "mkt_name": "Baikunthpur APMC",
-        "state_id": 7,
-        "district_id": 114
-      },
-      {
         "id": 1247,
         "mkt_name": "Baikunthpur APMC",
         "state_id": 19,
         "district_id": 323
+      },
+      {
+        "id": 2392,
+        "mkt_name": "Baikunthpur APMC",
+        "state_id": 7,
+        "district_id": 114
       },
       {
         "id": 4430,
@@ -9416,16 +9416,16 @@
         "district_id": 598
       },
       {
-        "id": 1523,
-        "mkt_name": "Balugaon APMC",
-        "state_id": 26,
-        "district_id": 435
-      },
-      {
         "id": 4247,
         "mkt_name": "Balugaon APMC",
         "state_id": 4,
         "district_id": 34
+      },
+      {
+        "id": 1523,
+        "mkt_name": "Balugaon APMC",
+        "state_id": 26,
+        "district_id": 435
       },
       {
         "id": 4667,
@@ -9476,16 +9476,16 @@
         "district_id": 135
       },
       {
-        "id": 2122,
-        "mkt_name": "Banda APMC",
-        "state_id": 19,
-        "district_id": 324
-      },
-      {
         "id": 1725,
         "mkt_name": "Banda APMC",
         "state_id": 34,
         "district_id": 599
+      },
+      {
+        "id": 2122,
+        "mkt_name": "Banda APMC",
+        "state_id": 19,
+        "district_id": 324
       },
       {
         "id": 2062,
@@ -11018,12 +11018,6 @@
         "district_id": 36
       },
       {
-        "id": 1815,
-        "mkt_name": "Bilaspur APMC",
-        "state_id": 12,
-        "district_id": 185
-      },
-      {
         "id": 410,
         "mkt_name": "Bilaspur APMC",
         "state_id": 7,
@@ -11034,6 +11028,12 @@
         "mkt_name": "Bilaspur APMC",
         "state_id": 34,
         "district_id": 648
+      },
+      {
+        "id": 1815,
+        "mkt_name": "Bilaspur APMC",
+        "state_id": 12,
+        "district_id": 185
       },
       {
         "id": 3409,
@@ -11708,16 +11708,16 @@
         "district_id": 711
       },
       {
-        "id": 3227,
-        "mkt_name": "Chandrapur APMC",
-        "state_id": 7,
-        "district_id": 107
-      },
-      {
         "id": 580,
         "mkt_name": "Chandrapur APMC",
         "state_id": 20,
         "district_id": 345
+      },
+      {
+        "id": 3227,
+        "mkt_name": "Chandrapur APMC",
+        "state_id": 7,
+        "district_id": 107
       },
       {
         "id": 2163,
@@ -13490,16 +13490,16 @@
         "district_id": 533
       },
       {
-        "id": 1246,
-        "mkt_name": "Dindori APMC",
-        "state_id": 19,
-        "district_id": 303
-      },
-      {
         "id": 1300,
         "mkt_name": "Dindori APMC",
         "state_id": 20,
         "district_id": 361
+      },
+      {
+        "id": 1246,
+        "mkt_name": "Dindori APMC",
+        "state_id": 19,
+        "district_id": 303
       },
       {
         "id": 2141,
@@ -14354,16 +14354,16 @@
         "district_id": 363
       },
       {
-        "id": 2460,
-        "mkt_name": "Gangapur APMC",
-        "state_id": 29,
-        "district_id": 484
-      },
-      {
         "id": 1319,
         "mkt_name": "Gangapur APMC",
         "state_id": 20,
         "district_id": 346
+      },
+      {
+        "id": 2460,
+        "mkt_name": "Gangapur APMC",
+        "state_id": 29,
+        "district_id": 484
       },
       {
         "id": 273,
@@ -14924,16 +14924,16 @@
         "district_id": 603
       },
       {
-        "id": 307,
-        "mkt_name": "Gorakhpur APMC",
-        "state_id": 34,
-        "district_id": 618
-      },
-      {
         "id": 2358,
         "mkt_name": "Gorakhpur APMC",
         "state_id": 19,
         "district_id": 303
+      },
+      {
+        "id": 307,
+        "mkt_name": "Gorakhpur APMC",
+        "state_id": 34,
+        "district_id": 618
       },
       {
         "id": 4710,
@@ -16238,16 +16238,16 @@
         "district_id": 548
       },
       {
-        "id": 219,
-        "mkt_name": "Jalalabad APMC",
-        "state_id": 28,
-        "district_id": 457
-      },
-      {
         "id": 1789,
         "mkt_name": "Jalalabad APMC",
         "state_id": 34,
         "district_id": 652
+      },
+      {
+        "id": 219,
+        "mkt_name": "Jalalabad APMC",
+        "state_id": 28,
+        "district_id": 457
       },
       {
         "id": 150,
@@ -16304,16 +16304,16 @@
         "district_id": 622
       },
       {
-        "id": 4257,
-        "mkt_name": "Jaleswar APMC",
-        "state_id": 4,
-        "district_id": 38
-      },
-      {
         "id": 1513,
         "mkt_name": "Jaleswar APMC",
         "state_id": 26,
         "district_id": 416
+      },
+      {
+        "id": 4257,
+        "mkt_name": "Jaleswar APMC",
+        "state_id": 4,
+        "district_id": 38
       },
       {
         "id": 151,
@@ -17990,16 +17990,16 @@
         "district_id": 628
       },
       {
-        "id": 319,
-        "mkt_name": "Kashipur APMC",
-        "state_id": 35,
-        "district_id": 672
-      },
-      {
         "id": 4244,
         "mkt_name": "Kashipur APMC",
         "state_id": 4,
         "district_id": 33
+      },
+      {
+        "id": 319,
+        "mkt_name": "Kashipur APMC",
+        "state_id": 35,
+        "district_id": 672
       },
       {
         "id": 340,
@@ -18638,16 +18638,16 @@
         "district_id": 34
       },
       {
-        "id": 4395,
-        "mkt_name": "Khatauli APMC",
-        "state_id": 29,
-        "district_id": 508
-      },
-      {
         "id": 651,
         "mkt_name": "Khatauli APMC",
         "state_id": 34,
         "district_id": 642
+      },
+      {
+        "id": 4395,
+        "mkt_name": "Khatauli APMC",
+        "state_id": 29,
+        "district_id": 508
       },
       {
         "id": 669,
@@ -21344,16 +21344,16 @@
         "district_id": 464
       },
       {
-        "id": 1249,
-        "mkt_name": "Mansa APMC",
-        "state_id": 11,
-        "district_id": 143
-      },
-      {
         "id": 1130,
         "mkt_name": "Mansa APMC",
         "state_id": 28,
         "district_id": 464
+      },
+      {
+        "id": 1249,
+        "mkt_name": "Mansa APMC",
+        "state_id": 11,
+        "district_id": 143
       },
       {
         "id": 2584,
@@ -23672,16 +23672,16 @@
         "district_id": 615
       },
       {
-        "id": 1383,
-        "mkt_name": "Nokha APMC",
-        "state_id": 29,
-        "district_id": 485
-      },
-      {
         "id": 776,
         "mkt_name": "Nokha APMC",
         "state_id": 5,
         "district_id": 83
+      },
+      {
+        "id": 1383,
+        "mkt_name": "Nokha APMC",
+        "state_id": 29,
+        "district_id": 485
       },
       {
         "id": 812,
@@ -23930,16 +23930,16 @@
         "district_id": 321
       },
       {
-        "id": 593,
-        "mkt_name": "Padampur APMC",
-        "state_id": 26,
-        "district_id": 417
-      },
-      {
         "id": 1136,
         "mkt_name": "Padampur APMC",
         "state_id": 29,
         "district_id": 495
+      },
+      {
+        "id": 593,
+        "mkt_name": "Padampur APMC",
+        "state_id": 26,
+        "district_id": 417
       },
       {
         "id": 4088,
@@ -24560,16 +24560,16 @@
         "district_id": 292
       },
       {
-        "id": 4601,
-        "mkt_name": "Parathode VFPCK Market",
-        "state_id": 17,
-        "district_id": 278
-      },
-      {
         "id": 4607,
         "mkt_name": "Parathode VFPCK Market",
         "state_id": 17,
         "district_id": 274
+      },
+      {
+        "id": 4601,
+        "mkt_name": "Parathode VFPCK Market",
+        "state_id": 17,
+        "district_id": 278
       },
       {
         "id": 567,
@@ -24710,16 +24710,16 @@
         "district_id": 19
       },
       {
-        "id": 3199,
-        "mkt_name": "Patan APMC",
-        "state_id": 7,
-        "district_id": 104
-      },
-      {
         "id": 444,
         "mkt_name": "Patan APMC",
         "state_id": 11,
         "district_id": 155
+      },
+      {
+        "id": 3199,
+        "mkt_name": "Patan APMC",
+        "state_id": 7,
+        "district_id": 104
       },
       {
         "id": 1658,
@@ -25646,16 +25646,16 @@
         "district_id": 348
       },
       {
-        "id": 253,
-        "mkt_name": "Pratapgarh APMC",
-        "state_id": 29,
-        "district_id": 514
-      },
-      {
         "id": 660,
         "mkt_name": "Pratapgarh APMC",
         "state_id": 34,
         "district_id": 645
+      },
+      {
+        "id": 253,
+        "mkt_name": "Pratapgarh APMC",
+        "state_id": 29,
+        "district_id": 514
       },
       {
         "id": 2389,
@@ -26426,12 +26426,6 @@
         "district_id": 682
       },
       {
-        "id": 1072,
-        "mkt_name": "Ramnagar APMC",
-        "state_id": 35,
-        "district_id": 668
-      },
-      {
         "id": 3007,
         "mkt_name": "Ramnagar APMC",
         "state_id": 19,
@@ -26442,6 +26436,12 @@
         "mkt_name": "Ramnagar APMC",
         "state_id": 5,
         "district_id": 93
+      },
+      {
+        "id": 1072,
+        "mkt_name": "Ramnagar APMC",
+        "state_id": 35,
+        "district_id": 668
       },
       {
         "id": 4771,
@@ -26456,16 +26456,16 @@
         "district_id": 648
       },
       {
-        "id": 2276,
-        "mkt_name": "Rampura APMC",
-        "state_id": 11,
-        "district_id": 131
-      },
-      {
         "id": 3756,
         "mkt_name": "Rampura APMC",
         "state_id": 16,
         "district_id": 250
+      },
+      {
+        "id": 2276,
+        "mkt_name": "Rampura APMC",
+        "state_id": 11,
+        "district_id": 131
       },
       {
         "id": 604,
@@ -27416,16 +27416,16 @@
         "district_id": 115
       },
       {
-        "id": 1288,
-        "mkt_name": "Sakri APMC",
-        "state_id": 20,
-        "district_id": 348
-      },
-      {
         "id": 3221,
         "mkt_name": "Sakri APMC",
         "state_id": 7,
         "district_id": 101
+      },
+      {
+        "id": 1288,
+        "mkt_name": "Sakri APMC",
+        "state_id": 20,
+        "district_id": 348
       },
       {
         "id": 1471,
@@ -27500,16 +27500,16 @@
         "district_id": 99
       },
       {
-        "id": 2394,
-        "mkt_name": "Sambalpur APMC",
-        "state_id": 7,
-        "district_id": 110
-      },
-      {
         "id": 596,
         "mkt_name": "Sambalpur APMC",
         "state_id": 26,
         "district_id": 445
+      },
+      {
+        "id": 2394,
+        "mkt_name": "Sambalpur APMC",
+        "state_id": 7,
+        "district_id": 110
       },
       {
         "id": 1788,
@@ -28244,16 +28244,16 @@
         "district_id": 290
       },
       {
-        "id": 89,
-        "mkt_name": "Shahabad APMC",
-        "state_id": 12,
-        "district_id": 175
-      },
-      {
         "id": 2211,
         "mkt_name": "Shahabad APMC",
         "state_id": 34,
         "district_id": 648
+      },
+      {
+        "id": 89,
+        "mkt_name": "Shahabad APMC",
+        "state_id": 12,
+        "district_id": 175
       },
       {
         "id": 1776,
@@ -28274,16 +28274,16 @@
         "district_id": 324
       },
       {
-        "id": 1891,
-        "mkt_name": "Shahapur APMC",
-        "state_id": 20,
-        "district_id": 371
-      },
-      {
         "id": 729,
         "mkt_name": "Shahapur APMC",
         "state_id": 16,
         "district_id": 269
+      },
+      {
+        "id": 1891,
+        "mkt_name": "Shahapur APMC",
+        "state_id": 20,
+        "district_id": 371
       },
       {
         "id": 2216,
@@ -28322,16 +28322,16 @@
         "district_id": 642
       },
       {
-        "id": 2762,
-        "mkt_name": "Shahpura APMC",
-        "state_id": 19,
-        "district_id": 303
-      },
-      {
         "id": 3555,
         "mkt_name": "Shahpura APMC",
         "state_id": 29,
         "district_id": 484
+      },
+      {
+        "id": 2762,
+        "mkt_name": "Shahpura APMC",
+        "state_id": 19,
+        "district_id": 303
       },
       {
         "id": 3072,
@@ -28490,16 +28490,16 @@
         "district_id": 359
       },
       {
-        "id": 3972,
-        "mkt_name": "Shetkari Krushi Bazar, Roshankheda, Tal Varid, Dist Amravati",
-        "state_id": 20,
-        "district_id": 340
-      },
-      {
         "id": 4032,
         "mkt_name": "Shetkari Krushi Bazar, Tal Manora, Dist Washim",
         "state_id": 20,
         "district_id": 372
+      },
+      {
+        "id": 3972,
+        "mkt_name": "Shetkari Krushi Utapanna Bazar Roshankheda Tal Varud Dist Amravati",
+        "state_id": 20,
+        "district_id": 340
       },
       {
         "id": 1285,
@@ -29018,16 +29018,16 @@
         "district_id": 103
       },
       {
-        "id": 90,
-        "mkt_name": "Sirsa APMC",
-        "state_id": 12,
-        "district_id": 183
-      },
-      {
         "id": 1749,
         "mkt_name": "Sirsa APMC",
         "state_id": 34,
         "district_id": 646
+      },
+      {
+        "id": 90,
+        "mkt_name": "Sirsa APMC",
+        "state_id": 12,
+        "district_id": 183
       },
       {
         "id": 2453,
@@ -29114,16 +29114,16 @@
         "district_id": 52
       },
       {
-        "id": 42,
-        "mkt_name": "Siwan APMC",
-        "state_id": 5,
-        "district_id": 90
-      },
-      {
         "id": 1842,
         "mkt_name": "Siwan APMC",
         "state_id": 12,
         "district_id": 173
+      },
+      {
+        "id": 42,
+        "mkt_name": "Siwan APMC",
+        "state_id": 5,
+        "district_id": 90
       },
       {
         "id": 1820,

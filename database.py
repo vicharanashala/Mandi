@@ -1,11 +1,11 @@
-
-
-
 """
 Agricultural Market Data — MongoDB Upload Script
 =================================================
-Normalises heterogeneous state-wise market data into a single
-unified schema and bulk-inserts it into MongoDB via pymongo.
+Normalises heterogeneous state-wise market data into a unified schema,
+then splits it into two MongoDB collections:
+
+  1. markets_commodities  — master/dimension table (written once per unique combo)
+  2. price_records        — fact/time-series table  (inserted every 2 hours)
 
 Usage
 -----
@@ -19,61 +19,38 @@ import os
 import re
 from datetime import datetime, timezone
 from dateutil import parser as date_parser
-from pymongo import MongoClient, ReplaceOne, ASCENDING
+from pymongo import MongoClient, UpdateOne, ASCENDING
 from pymongo.errors import BulkWriteError, OperationFailure
 from dotenv import load_dotenv
 import json
+
 load_dotenv()
 from utils.sources import sources
+
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-MONGO_URI   = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-DB_NAME     = os.getenv("MANDI_DB_NAME").strip()
-COLLECTION  = os.getenv("MANDI_COLLECTION")
-# FOr Commodity
+MONGO_URI              = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+DB_NAME                = os.getenv("MANDI_DB_NAME", "").strip()
+MASTER_COLLECTION      = os.getenv('MASTER_COLLECTION').strip()  # dimension table
+PRICE_COLLECTION       = os.getenv('PRICE_COLLECTION').strip()         # fact / time-series table
 
-# ─────────────────────────────────────────────
-# UNIFIED SCHEMA
-# ─────────────────────────────────────────────
-# Every document stored in MongoDB will follow this shape:
-#
-#  {
-#    source_system    : str        – source identifier (e.g. 'agmarknet')
-#    state            : str        – state name (lower-case)
-#    date             : datetime   – UTC midnight of the price date
-#    market_name      : str|None   – market / mandi name (lower-case)
-#    market_id        : str|None   – unique market ID
-#    commodity_id     : str|None   – unique commodity ID
-#    commodity_group  : str|None   – commodity group (e.g. 'cereals')
-#    commodity_name   : str        – commodity name (lower-case)
-#    variety          : str|None   – variety / grade detail
-#    grade            : str|None   – FAQ / Medium / etc.
-#    arrival_quantity : float|None – arrival quantity
-#    min_price        : float|None – minimum price (₹)
-#    max_price        : float|None – maximum price (₹)
-#    modal_price      : float|None – modal / average price (₹)
-#    source_url       : str        – URL of data source
-#    source_name      : str        – name of data source
-#    method           : str        – scraping method used
-#    source_state     : str        – original state key in raw data
-#    ingested_at      : datetime   – UTC timestamp of this upload
-#  }
-#
-#  Unique index : (state, market_name, commodity_name, variety, date)
-
+ALL_MANDI_COLLECTION = os.getenv('ALL_MANDI_COLLECTION').strip()
 
 # ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
 
 def _parse_date(raw: str) -> datetime | None:
-    """Parse DD/MM/YYYY or any common date string → UTC midnight datetime."""
+    """Parse any common date string → UTC-aware datetime (stored as BSON Date)."""
     if not raw:
         return None
     try:
         dt = date_parser.parse(str(raw), dayfirst=True)
-        return dt.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+        # If the parsed datetime is naive, treat it as UTC
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except Exception:
         return None
 
@@ -83,7 +60,6 @@ def _to_float(val) -> float | None:
     if val is None:
         return None
     s = str(val)
-    # strip non-numeric chars except dot and minus
     cleaned = re.sub(r"[^\d.\-]", "", s.split("/")[0])
     try:
         return float(cleaned) if cleaned else None
@@ -95,307 +71,177 @@ def _lower(val) -> str | None:
     return str(val).strip().lower() if val else None
 
 
-def _lowercase_doc(doc: dict) -> dict:
-    """Return a copy of *doc* with every string value lower-cased."""
-    return {
-        k: (v.strip().lower() if isinstance(v, str) else v)
-        for k, v in doc.items()
-    }
+def _strip_nulls(doc: dict) -> dict:
+    """Remove keys whose value is None — reduces document size."""
+    return {k: v for k, v in doc.items() if v is not None}
 
 
 # ─────────────────────────────────────────────
 # STATE-SPECIFIC NORMALISERS
+# Each returns a FULL flat dict; splitting happens in the pipeline.
 # ─────────────────────────────────────────────
 
 def _norm_karnataka(record: dict, state: str) -> dict:
-    """Normalise a single record from the Karnataka KRAMA scraper.
-
-    Karnataka (KRAMA) field reference
-    ----------------------------------
-    Market      – market / mandi name  (Title-case in source)
-    Date        – price date  (DD/MM/YYYY)
-    Commodity   – commodity name  (Title-case)
-    Variety     – variety / grade detail
-    Grade       – FAQ / Medium / etc.
-    Unit        – Quintal / Kg / etc.
-    Arrival     – arrival quantity in the given unit
-    Min         – minimum price  (₹/unit)
-    Max         – maximum price  (₹/unit)
-    Modal       – modal price  (₹/unit)
-
-    Source: https://krama.karnataka.gov.in  (web scraper)
-    """
+    market_name = _lower(record.get("Market"))
     return dict(
-        source_system    = "krama",
-        state            = state.lower(),
-        date             = _parse_date(record.get("Date")),
-        market_name      = _lower(record.get("Market")),
-        market_id        = None,
-        commodity_id     = get_commodity_id(_lower(record.get("Commodity"))),
-        commodity_group  = _lower(record.get("Group")),
-        commodity_name   = _lower(record.get("Commodity")),
-        variety          = _lower(record.get("Variety")),
-        grade            = _lower(record.get("Grade")),
-        arrival_quantity = _to_float(record.get("Arrival")),
-        min_price        = _to_float(record.get("Min")),
-        max_price        = _to_float(record.get("Max")),
-        modal_price      = _to_float(record.get("Modal")),
-        source_url       = sources["karnataka"]["url"],
-        method           = sources["karnataka"]["method"],
-        source_name      = sources["karnataka"]["source_name"],
+        source_system              = "krama",
+        state                      = state.lower(),
+        date                       = _parse_date(record.get("Date")),
+        market_name                = market_name,
+        market_id                  = get_market_id(market_name, state),
+        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("Commodity"))),
+        commodity_group            = _lower(record.get("Group")),
+        commodity_name             = _lower(record.get("Commodity")),
+        variety                    = _lower(record.get("Variety")),
+        grade                      = _lower(record.get("Grade")),
+        arrival_quantity           = _to_float(record.get("Arrival")),
+        min_price                  = _to_float(record.get("Min")),
+        max_price                  = _to_float(record.get("Max")),
+        modal_price                = _to_float(record.get("Modal")),
+        source_url                 = sources["karnataka"]["url"],
+        method                     = sources["karnataka"]["method"],
+        source_name                = sources["karnataka"]["source_name"],
     )
 
 
 def _norm_meghalaya(record: dict, state: str) -> dict:
-    """Normalise a single record from the Meghalaya MEGAMB scraper.
-
-    Meghalaya (MEGAMB) field reference
-    ------------------------------------
-    market                    – market / mandi name  (lowercase in source)
-    date                      – price date  (YYYY-MM-DD or similar)
-    commodity_name            – commodity name
-    variety                   – variety / grade detail
-    grade                     – FAQ / Medium / etc.
-    Unit                      – unit of measurement  (note: Title-case key)
-    arrival_quintals          – arrival quantity (quintals)
-    min_price_rs_per_quintal  – minimum price  (₹/quintal)
-    max_price_rs_per_quintal  – maximum price  (₹/quintal)
-    Modal                     – modal price  (₹/quintal)  (note: Title-case key)
-
-    Source: https://megamb.gov.in  (web scraper)
-    """
+    market_name = _lower(record.get("market"))
     return dict(
-        source_system    = "megamb",
-        state            = state.lower(),
-        date             = _parse_date(record.get("date")),
-        market_name      = _lower(record.get("market")),
-        market_id        = None,
-        commodity_id     = get_commodity_id(_lower(record.get("commodity_name"))),
-        commodity_group  = _lower(record.get("Group Name")),
-        commodity_name   = _lower(record.get("commodity_name")),
-        variety          = _lower(record.get("Variety")),
-        grade            = _lower(record.get("Grade")),
-        arrival_quantity = _to_float(record.get("arrival_quintals")),
-        min_price        = _to_float(record.get("min_price_rs_per_quintal")),
-        max_price        = _to_float(record.get("max_price_rs_per_quintal")),
-        modal_price      = _to_float(record.get("Modal")),
-        source_url       = sources["meghalaya"]["url"],
-        method           = sources["meghalaya"]["method"],
-        source_name      = sources["meghalaya"]["source_name"],
+        source_system              = "megamb",
+        state                      = state.lower(),
+        date                       = _parse_date(record.get("date")),
+        market_name                = market_name,
+        market_id                  = get_market_id(market_name, state),
+        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("commodity_name"))),
+        commodity_group            = _lower(record.get("Group Name")),
+        commodity_name             = _lower(record.get("commodity_name")),
+        variety                    = _lower(record.get("Variety")),
+        grade                      = _lower(record.get("Grade")),
+        arrival_quantity           = _to_float(record.get("arrival_quintals")),
+        min_price                  = _to_float(record.get("min_price_rs_per_quintal")),
+        max_price                  = _to_float(record.get("max_price_rs_per_quintal")),
+        modal_price                = _to_float(record.get("Modal")),
+        source_url                 = sources["meghalaya"]["url"],
+        method                     = sources["meghalaya"]["method"],
+        source_name                = sources["meghalaya"]["source_name"],
     )
 
 
 def _norm_nagaland(record: dict, state: str) -> dict:
-    """Normalise a single record from the Nagaland commodityonline scraper.
-
-    Nagaland (commodityonline) field reference
-    -------------------------------------------
-    District     – district name  (Title-case)
-    Market       – market / mandi name  (Title-case)
-    Arrival Date – price / arrival date  (DD/MM/YYYY)
-    Commodity    – commodity name  (Title-case)
-    Variety      – variety detail  (Title-case)
-    Min Price    – minimum price  (₹/quintal, implied)
-    Max Price    – maximum price  (₹/quintal, implied)
-    Avg price    – average / modal price  (₹/quintal, implied)
-
-    Notes:
-    - No arrival quantity is reported by this source.
-    - Unit is always quintal (implied; not stated in the raw record).
-    - Grade is not reported.
-
-    Source: https://www.commodityonline.com  (web scraper)
-    """
+    market_name = _lower(record.get("Market"))
     return dict(
-        source_system    = "commodity_online",
-        state            = state.lower(),
-        date             = _parse_date(record.get("Arrival Date")),
-        market_name      = _lower(record.get("Market")),
-        market_id        = None,
-        commodity_id     = get_commodity_id(_lower(record.get("commodity_name"))),
-        commodity_group  = None,
-        commodity_name   = _lower(record.get("Commodity")),
-        variety          = _lower(record.get("Variety")),
-        grade            = None,
-        arrival_quantity = None,
-        min_price        = _to_float(record.get("Min Price")),
-        max_price        = _to_float(record.get("Max Price")),
-        modal_price      = _to_float(record.get("Avg price")),
-        source_url       = sources["nagaland"]["url"],
-        method           = sources["nagaland"]["method"],
-        source_name      = sources["nagaland"]["source_name"],
+        source_system              = "commodity_online",
+        state                      = state.lower(),
+        date                       = _parse_date(record.get("Arrival Date")),
+        market_name                = market_name,
+        market_id                  = get_market_id(market_name, state),
+        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("commodity_name"))),
+        commodity_group            = None,
+        commodity_name             = _lower(record.get("Commodity")),
+        variety                    = _lower(record.get("Variety")),
+        grade                      = None,
+        arrival_quantity           = None,
+        min_price                  = _to_float(record.get("Min Price")),
+        max_price                  = _to_float(record.get("Max Price")),
+        modal_price                = _to_float(record.get("Avg price")),
+        source_url                 = sources["nagaland"]["url"],
+        method                     = sources["nagaland"]["method"],
+        source_name                = sources["nagaland"]["source_name"],
     )
 
 
 def _norm_maharashtra(record: dict, state: str) -> dict:
-    """Normalise a single record from the Maharashtra MSAMB API.
-
-    Maharashtra (MSAMB) field reference
-    -------------------------------------
-    Market       – market / mandi name  (Title-case key, mixed-case value)
-    date         – price date  (DD/MM/YYYY or similar)
-    commodity    – commodity name  (lowercase)
-    variety      – variety detail  (lowercase)
-    unit         – unit of measurement  (lowercase, e.g. "quintal")
-    arrival      – arrival quantity in the given unit
-    min_price    – minimum price  (₹/unit)
-    max_price    – maximum price  (₹/unit)
-    modal_price  – modal price  (₹/unit)
-
-    Notes:
-    - District and grade are not reported by this source.
-    - Wholesale / retail prices are not reported.
-
-    Source: https://www.msamb.com  (external API)
-    """
+    market_name = _lower(record.get("Market"))
     return dict(
-        source_system    = "msamb",
-        state            = state.lower(),
-        date             = _parse_date(record.get("date")),
-        market_name      = _lower(record.get("Market")),      # key is Title-case in source
-        market_id        = None,
-        commodity_id     = get_commodity_id(_lower(record.get("commodity"))),
-        commodity_group  = None,
-        commodity_name   = _lower(record.get("commodity")),
-        variety          = _lower(record.get("variety")),
-        grade            = None,
-        arrival_quantity = _to_float(record.get("arrival")),
-        min_price        = _to_float(record.get("min_price")),
-        max_price        = _to_float(record.get("max_price")),
-        modal_price      = _to_float(record.get("modal_price")),
-        source_url       = sources["maharashtra"]["url"],
-        method           = sources["maharashtra"]["method"],
-        source_name      = sources["maharashtra"]["source_name"],
+        source_system              = "msamb",
+        state                      = state.lower(),
+        date                       = _parse_date(record.get("date")),
+        market_name                = market_name,
+        market_id                  = get_market_id(market_name, state),
+        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("commodity"))),
+        commodity_group            = None,
+        commodity_name             = _lower(record.get("commodity")),
+        variety                    = _lower(record.get("variety")),
+        grade                      = None,
+        arrival_quantity           = _to_float(record.get("arrival")),
+        min_price                  = _to_float(record.get("min_price")),
+        max_price                  = _to_float(record.get("max_price")),
+        modal_price                = _to_float(record.get("modal_price")),
+        source_url                 = sources["maharashtra"]["url"],
+        method                     = sources["maharashtra"]["method"],
+        source_name                = sources["maharashtra"]["source_name"],
     )
 
 
 def _norm_uttar_pradesh(record: dict, state: str) -> dict:
-    """Normalise a single record from the Uttar Pradesh UP Mandi Prices API.
-
-    Uttar Pradesh (upmandiprices.in) field reference
-    --------------------------------------------------
-    Market          – market / mandi name  (Title-case)
-    Date            – price date  (DD/MM/YYYY)
-    Commodity       – commodity name  (Title-case)
-    arrival         – arrival quantity (quintals, lowercase key)
-    Wholesale_rate  – wholesale price  (₹/quintal, Title-case key)
-    Retail_price    – retail price  (₹/quintal, Title-case key)
-
-    Notes:
-    - District, variety, and grade are not reported.
-    - Min / max / modal prices are NOT available; this source gives
-      wholesale and retail rates instead.
-    - Unit is always quintal (implied; not stated in raw record).
-
-    Source: https://upmandiprices.in  (external API)
-    """
     return dict(
-        source_system    = "up_krishi",
-        state            = state.lower(),
-        date             = _parse_date(record.get("Date")),
-        market_name      = None,                                # not provided by source
-        market_id        = None,
-        commodity_id     = get_commodity_id(_lower(record.get("ProductName"))),
-        commodity_group  = _lower(record.get("MainProductName")),
-        commodity_name   = _lower(record.get("ProductName")),
-        variety          = None,
-        grade            = None,
-        arrival_quantity = _to_float(record.get("aavakRate")),
-        min_price        = None,
-        max_price        = None,
-        modal_price      = None,
-        source_url       = sources["uttar_pradesh"]["url"],
-        method           = sources["uttar_pradesh"]["method"],
-        source_name      = sources["uttar_pradesh"]["source_name"],
+        source_system              = "up_krishi",
+        state                      = state.lower(),
+        date                       = _parse_date(record.get("Date")),
+        market_name                = None,
+        market_id                  = None,   # UP records carry no market name
+        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("ProductName"))),
+        commodity_group            = _lower(record.get("MainProductName")),
+        commodity_name             = _lower(record.get("ProductName")),
+        variety                    = None,
+        grade                      = None,
+        arrival_quantity           = _to_float(record.get("aavakRate")),
+        min_price                  = None,
+        max_price                  = None,
+        modal_price                = None,
+        source_url                 = sources["uttar_pradesh"]["url"],
+        method                     = sources["uttar_pradesh"]["method"],
+        source_name                = sources["uttar_pradesh"]["source_name"],
     )
 
 
 def _norm_punjab(record: dict, state: str) -> dict:
-    """Normalise a single record from the Punjab e-Mandikaran API.
-
-    Punjab (e-Mandikaran) field reference
-    ---------------------------------------
-    DistrictName  – district name  (Title-case)
-    Market        – market / mandi name  (Title-case)
-    EntryDate     – price / entry date  (DD/MM/YYYY or ISO)
-    CommodityName – commodity name  (Title-case)
-    Quantity      – arrival quantity  (quintals)
-    Minprice      – minimum price  (₹/quintal; note: inconsistent casing)
-    MaxPrice      – maximum price  (₹/quintal)
-    ModalPrice    – modal price  (₹/quintal)
-
-    Notes:
-    - Variety and grade are not reported by this source.
-    - Wholesale / retail prices are not reported.
-    - Unit is always quintal (implied; not stated in raw record).
-
-    Source: https://emandikaran-pb.in  (external API)
-    """
+    market_name = _lower(record.get("BranchName"))
     return dict(
-        source_system    = "emandikaran",
-        state            = state.lower(),
-        date             = _parse_date(record.get("EntryDate")),
-        market_name      = _lower(record.get("BranchName")),
-        market_id        = None,
-        commodity_id     = get_commodity_id(_lower(record.get("CommodityName"))),
-        commodity_group  = None,
-        commodity_name   = _lower(record.get("CommodityName")),
-        variety          = None,
-        grade            = None,
-        arrival_quantity = _to_float(record.get("Quantity")),
-        min_price        = _to_float(record.get("Minprice")),     # note: lowercase 'p' in source
-        max_price        = _to_float(record.get("MaxPrice")),
-        modal_price      = _to_float(record.get("ModalPrice")),
-        source_url       = sources["punjab"]["url"],
-        method           = sources["punjab"]["method"],
-        source_name      = sources["punjab"]["source_name"],
+        source_system              = "emandikaran",
+        state                      = state.lower(),
+        date                       = _parse_date(record.get("EntryDate")),
+        market_name                = market_name,
+        market_id                  = get_market_id(market_name, state),
+        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("CommodityName"))),
+        commodity_group            = None,
+        commodity_name             = _lower(record.get("CommodityName")),
+        variety                    = None,
+        grade                      = None,
+        arrival_quantity           = _to_float(record.get("Quantity")),
+        min_price                  = _to_float(record.get("Minprice")),
+        max_price                  = _to_float(record.get("MaxPrice")),
+        modal_price                = _to_float(record.get("ModalPrice")),
+        source_url                 = sources["punjab"]["url"],
+        method                     = sources["punjab"]["method"],
+        source_name                = sources["punjab"]["source_name"],
     )
+
 
 def _norm_agmarknet(record: dict, state: str) -> dict:
-    """Normalise a single record from the Agmarknet API response.
-
-    Agmarknet field reference
-    -------------------------
-    cmdt_name            – commodity name
-    cmdt_grp_name        – commodity group  (e.g. "Cereals")
-    market               – market / mandi name  (lowercase in API)
-    state                – state name  (lowercase in API)
-    reported_date        – price date  (DD-MM-YYYY)
-    as_on_price          – current modal/as-on price (₹/quintal)
-    as_on_arrival        – current arrival quantity (quintal)
-    msp_price            – minimum support price (₹/quintal)
-    trend                – price trend direction ("up" / "down" / "stable")
-    one_day_ago_price    – price 1 day earlier (nullable)
-    two_day_ago_price    – price 2 days earlier (nullable)
-    one_day_ago_arrival  – arrival 1 day earlier (nullable)
-    two_day_ago_arrival  – arrival 2 days earlier (nullable)
-    """
-    # Prefer the state embedded in the record; fall back to the passed-in key.
     record_state = record.get("state") or state
-
+    market_name  = _lower(record.get("market"))
     return dict(
-        source_system    = "agmarknet",
-        state            = _lower(record_state),
-        date             = _parse_date(record.get("reported_date")),
-        market_name      = _lower(record.get("market")),        # lowercase key
-        market_id        = None,
-        commodity_id     = get_commodity_id(_lower(record.get("cmdt_name"))),
-        commodity_group  = _lower(record.get("cmdt_grp_name")), # e.g. "cereals"
-        commodity_name   = _lower(record.get("cmdt_name")),
-        variety          = None,
-        grade            = None,
-        arrival_quantity = _to_float(record.get("as_on_arrival")),
-        min_price        = None,
-        max_price        = None,
-        modal_price      = _to_float(record.get("as_on_price")),  # as_on_price is the modal price
-        source_url       = sources["agmarknet"]["url"],
-        method           = sources["agmarknet"]["method"],
-        source_name      = sources["agmarknet"]["source_name"],
+        source_system              = "agmarknet",
+        state                      = _lower(record_state),
+        date                       = _parse_date(record.get("reported_date")),
+        market_name                = market_name,
+        market_id                  = get_market_id(market_name, record_state),
+        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("cmdt_name"))),
+        commodity_group            = _lower(record.get("cmdt_grp_name")),
+        commodity_name             = _lower(record.get("cmdt_name")),
+        variety                    = None,
+        grade                      = None,
+        arrival_quantity           = _to_float(record.get("as_on_arrival")),
+        min_price                  = None,
+        max_price                  = None,
+        modal_price                = _to_float(record.get("as_on_price")),
+        source_url                 = sources["agmarknet"]["url"],
+        method                     = sources["agmarknet"]["method"],
+        source_name                = sources["agmarknet"]["source_name"],
     )
 
 
-
-# Map state key → normaliser function
 STATE_NORMALISERS = {
     "Karnataka":     _norm_karnataka,
     "Meghalaya":     _norm_meghalaya,
@@ -403,46 +249,52 @@ STATE_NORMALISERS = {
     "Maharashtra":   _norm_maharashtra,
     "Uttar Pradesh": _norm_uttar_pradesh,
     "Punjab":        _norm_punjab,
-    "agmarknet":     _norm_agmarknet,   # national Agmarknet feed (multi-state)
+    "agmarknet":     _norm_agmarknet,
 }
+
+
+# ─────────────────────────────────────────────
+# SPLIT: flat doc → (master_doc, price_doc)
+# ─────────────────────────────────────────────
+
+# Fields that belong to the master/dimension table
+MASTER_FIELDS = {
+    "source_system", "state", "market_name", "market_id",
+    "commodity_alias_lookup_id", "commodity_group", "commodity_name",
+    "variety", "grade", "source_url", "source_name", "method",
+}
+
+# Fields that belong to the price fact table
+# market_id and commodity_alias_lookup_id are also written here so that
+# price records can be queried independently without a join.
+PRICE_FIELDS = {
+    "date", "arrival_quantity", "min_price", "max_price",
+    "modal_price", "ingested_at", "market_id", "commodity_alias_lookup_id",
+}
+
+# Compound key that uniquely identifies a market+commodity combo
+MASTER_KEY_FIELDS = ("source_system", "state", "market_name", "commodity_name", "variety")
+
+
+def split_document(doc: dict) -> tuple[dict, dict]:
+    """
+    Split a flat normalised document into:
+      - master_doc : static meta fields (written once)
+      - price_doc  : price + quantity fields (written every 2 hours)
+    """
+    master_doc = {k: doc[k] for k in MASTER_FIELDS if k in doc}
+    price_doc  = {k: doc[k] for k in PRICE_FIELDS  if k in doc}
+    return master_doc, price_doc
 
 
 # ─────────────────────────────────────────────
 # CORE PIPELINE
 # ─────────────────────────────────────────────
 
-UNIFIED_KEYS = [
-    # ── source & identity ─────────────────────────
-    "source_system",
-    "state",
-    "date",
-    # ── market ────────────────────────────────────
-    "market_name",
-    "market_id",
-    # ── commodity ─────────────────────────────────
-    "commodity_id",
-    "commodity_group",
-    "commodity_name",
-    "variety",
-    "grade",
-    # ── quantity & prices ─────────────────────────
-    "arrival_quantity",
-    "min_price",
-    "max_price",
-    "modal_price",
-    # ── provenance ────────────────────────────────
-    "source_url",
-    "source_name",
-    "method",
-    "source_state",
-    "ingested_at",
-]
-
-
 def normalise_all(raw_data: dict) -> list[dict]:
     """
     raw_data : { "Karnataka": {"success": True, "data": [...]}, ... }
-    Returns   : list of unified documents ready for MongoDB insertion.
+    Returns   : list of unified flat documents (splitting happens at upload time).
     """
     now = datetime.now(tz=timezone.utc)
     documents = []
@@ -452,7 +304,7 @@ def normalise_all(raw_data: dict) -> list[dict]:
             print(f"[SKIP] {state_key} — success=False")
             continue
 
-        records = payload.get("data", [])
+        records    = payload.get("data", [])
         normaliser = STATE_NORMALISERS.get(state_key)
 
         if normaliser is None:
@@ -462,173 +314,260 @@ def normalise_all(raw_data: dict) -> list[dict]:
         for rec in records:
             try:
                 doc = normaliser(rec, state=state_key)
-                doc["source_state"] = state_key     # original key preserved
+                doc["source_state"] = state_key
                 doc["ingested_at"]  = now
-                
-                # Enforce key order strictly using UNIFIED_KEYS
-                ordered_doc = {k: doc.get(k, None) for k in UNIFIED_KEYS}
-                documents.append(ordered_doc)
+                documents.append(doc)
             except Exception as exc:
                 print(f"[ERROR] {state_key} record skipped — {exc}: {rec}")
 
-    print(f"[INFO] Normalised {len(documents)} documents across "
-          f"{len(raw_data)} states.")
+    print(f"[INFO] Normalised {len(documents)} documents across {len(raw_data)} states.")
     return documents
 
 
+# ─────────────────────────────────────────────
+# INDEX MANAGEMENT
+# ─────────────────────────────────────────────
+
 def _create_index_safe(collection, keys, **kwargs) -> None:
-    """Create an index, silently skipping if the name already exists."""
     name = kwargs.get("name", "<unnamed>")
     try:
         collection.create_index(keys, **kwargs)
     except OperationFailure as exc:
-        # Code 85 = IndexOptionsConflict, 86 = IndexKeySpecsConflict.
-        # Both mean the index (or its name) already exists — safe to ignore.
         print(f"[INFO] Index '{name}' already exists, skipping: {exc}")
 
 
-def ensure_indexes(collection) -> None:
-    """
-    Create indexes for fast querying and upsert matching.
+def ensure_indexes(master_coll, price_coll) -> None:
+    """Create indexes on both collections."""
 
-    Drops stale indexes whose key patterns no longer match the current schema
-    (e.g. old ``market``/``commodity`` field names) before recreating them.
-    """
-    try:
-        existing = collection.index_information()
-
-        # ── Drop stale unique_price_entry if its key pattern is wrong ─────────
-        if "unique_price_entry" in existing:
-            old_keys = {k for k, _ in existing["unique_price_entry"].get("key", [])}
-            expected = {"source_system", "state", "market_name", "commodity_name", "variety", "date"}
-            if old_keys != expected:
-                collection.drop_index("unique_price_entry")
-                print("[INFO] Dropped stale 'unique_price_entry' index (wrong field names).")
-    except Exception as exc:
-        print(f"[WARN] Could not inspect/drop old index: {exc}")
-
-    # ── Recreate with correct fields ──────────────────────────────────────────
+    # ── markets_commodities ───────────────────────────────────────────
+    # Unique compound key: the combination that identifies one master record
     _create_index_safe(
-        collection,
+        master_coll,
         [
             ("source_system",  ASCENDING),
             ("state",          ASCENDING),
             ("market_name",    ASCENDING),
             ("commodity_name", ASCENDING),
             ("variety",        ASCENDING),
-            ("date",           ASCENDING),
+        ],
+        unique=True,
+        name="unique_market_commodity",
+    )
+    _create_index_safe(master_coll, [("state",          ASCENDING)], name="idx_mc_state")
+    _create_index_safe(master_coll, [("commodity_name", ASCENDING)], name="idx_mc_commodity")
+
+    # ── price_records ─────────────────────────────────────────────────
+    # Unique: one price entry per master combo per date
+    _create_index_safe(
+        price_coll,
+        [
+            ("market_commodity_id", ASCENDING),
+            ("date",                ASCENDING),
         ],
         unique=True,
         name="unique_price_entry",
     )
-    _create_index_safe(collection, [("date",           ASCENDING)], name="idx_date")
-    _create_index_safe(collection, [("state",          ASCENDING)], name="idx_state")
-    _create_index_safe(collection, [("commodity_name", ASCENDING)], name="idx_commodity")
-    print("[INFO] Indexes ensured.")
+    _create_index_safe(price_coll, [("date",                ASCENDING)], name="idx_pr_date")
+    _create_index_safe(price_coll, [("market_commodity_id", ASCENDING)], name="idx_pr_mc_id")
+
+    print("[INFO] Indexes ensured on both collections.")
 
 
-def upload_to_mongo(documents: list[dict],
-                    uri: str       = MONGO_URI,
-                    db_name: str   = DB_NAME,
-                    coll_name: str = COLLECTION) -> None:
+# ─────────────────────────────────────────────
+# UPLOAD — two-collection normalised approach
+# ─────────────────────────────────────────────
+
+def upload_to_mongo(
+    documents: list[dict],
+    uri: str     = MONGO_URI,
+    db_name: str = DB_NAME,
+) -> None:
     """
-    Upsert documents into MongoDB.
+    For each normalised document:
+      1. Upsert into markets_commodities using $setOnInsert
+         (meta fields written only on first insert, never overwritten).
+      2. Use the returned _id as market_commodity_id in price_records.
+      3. Upsert into price_records (one price row per combo per date).
 
-    Duplicate detection is AND-wise across three fields:
-        commodity (name)  AND  market (apmc name)  AND  date
-    A record is only inserted when ALL three of these values are new
-    together.  Matching on any subset alone is NOT sufficient to trigger
-    a skip — all three must match simultaneously.
-
-    All string fields are lower-cased before storage to ensure that
-    'Wheat', 'WHEAT', and 'wheat' are treated as the same commodity.
+    Null fields are stripped before writing to save storage.
     """
     if not documents:
         print("[INFO] Nothing to upload.")
         return
 
     client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-    # Verify connectivity
     client.admin.command("ping")
     print(f"[INFO] Connected to MongoDB at {uri}")
 
-    db   = client[db_name]
-    coll = db[coll_name]
+    db          = client[db_name]
+    master_coll = db[MASTER_COLLECTION]
+    price_coll  = db[PRICE_COLLECTION]
 
-    ensure_indexes(coll)
+    ensure_indexes(master_coll, price_coll)
 
-    # Build upsert operations using ReplaceOne to enforce dictionary key order.
-    # The filter uses AND logic across commodity + market (apmc) + date so that
-    # a record is skipped/updated only when ALL three fields match an existing
-    # document.  Any other combination results in a fresh insert.
-    ops = []
+    master_ops      = []   # bulk upserts for markets_commodities
+    price_ops_meta  = []   # metadata needed to build price ops after bulk
+
     skipped = 0
+
     for doc in documents:
-        # Lower-case every string field before writing
-        doc = _lowercase_doc(doc)
+        master_doc, price_doc = split_document(doc)
 
-        commodity_lc     = (doc.get("commodity_name") or "").strip().lower() or None
-        market_lc        = (doc.get("market_name")    or "").strip().lower() or None
-        state_lc         = (doc.get("state")         or "").strip().lower() or None
-        source_system_lc = (doc.get("source_system") or "").strip().lower() or None
-        variety_lc       = (doc.get("variety")       or "").strip().lower() or None
+        # ── Build the compound lookup key ──────────────────────────────
+        filter_key = {
+            field: (master_doc.get(field) or "").strip().lower() or None
+            for field in MASTER_KEY_FIELDS
+        }
 
-        # Normalise date: store as "YYYY-MM-DD" string for consistent index matching.
-        # _parse_date returns a datetime object; convert to ISO date string here.
-        raw_date = doc.get("date")
-        if isinstance(raw_date, datetime):
-            date_str = raw_date.strftime("%Y-%m-%d")
-            doc["date"] = date_str   # store as string in the document too
-        else:
-            date_str = str(raw_date) if raw_date else None
-
-        # Skip degenerate records where all unique-key fields are null —
-        # they would all map to the same index slot and cause E11000 errors.
-        if not any([source_system_lc, market_lc, commodity_lc, variety_lc, date_str]):
+        # Skip degenerate records where every key field is null
+        if not any(filter_key.values()):
             skipped += 1
             continue
 
-        filter_key = {
-            "source_system":  source_system_lc,  # AND – different feeds never collide
-            "state":          state_lc,          # AND – same commodity across states
-            "market_name":    market_lc,         # AND
-            "commodity_name": commodity_lc,      # AND
-            "variety":        variety_lc,        # AND – same commodity, different variety
-            "date":           date_str,          # AND – normalised to YYYY-MM-DD string
+        # Normalise strings for static identity fields (written only on first insert).
+        # Strip nulls here because these fields must have real values.
+        static_fields = {
+            "source_system", "state", "market_name", "commodity_group",
+            "commodity_name", "variety", "grade",
+            "source_url", "source_name", "method",
         }
-        ops.append(ReplaceOne(filter_key, doc, upsert=True))
+        set_on_insert = _strip_nulls({
+            k: (v.strip().lower() if isinstance(v, str) else v)
+            for k, v in master_doc.items()
+            if k in static_fields
+        })
+
+        # market_id and commodity_alias_lookup_id go into $set so they are
+        # refreshed on every run and always present — even as null — so every
+        # document has a consistent schema regardless of lookup success.
+        set_always = {
+            "market_id":                master_doc.get("market_id"),
+            "commodity_alias_lookup_id": master_doc.get("commodity_alias_lookup_id"),
+        }
+
+        master_ops.append(UpdateOne(
+            filter_key,
+            {
+                "$set":         set_always,
+                "$setOnInsert": set_on_insert,
+            },
+            upsert=True,
+        ))
+
+        # Store filter_key + price_doc so we can look up _id after bulk write
+        price_ops_meta.append((filter_key, price_doc))
 
     if skipped:
-        print(f"[WARN] Skipped {skipped} degenerate record(s) with all-null index fields.")
+        print(f"[WARN] Skipped {skipped} degenerate record(s) with all-null key fields.")
 
-    try:
-        result = coll.bulk_write(ops, ordered=False)
-        print(f"[OK] Upserted  : {result.upserted_count}")
-        print(f"[OK] Modified  : {result.modified_count}")
-        print(f"[OK] Matched   : {result.matched_count}")
-    except BulkWriteError as bwe:
-        n_err = len(bwe.details.get("writeErrors", []))
-        print(f"[WARN] Bulk write completed with {n_err} errors.")
-        for err in bwe.details.get("writeErrors", [])[:5]:   # show first 5
-            print(f"       {err}")
-    finally:
-        client.close()
-        print("[INFO] Connection closed.")
+    # ── Step 1: bulk upsert master records ────────────────────────────
+    if master_ops:
+        try:
+            result = master_coll.bulk_write(master_ops, ordered=False)
+            print(f"[OK] markets_commodities — upserted: {result.upserted_count}, "
+                  f"matched: {result.matched_count}")
+        except BulkWriteError as bwe:
+            n_err = len(bwe.details.get("writeErrors", []))
+            print(f"[WARN] markets_commodities bulk write had {n_err} error(s).")
+            for err in bwe.details.get("writeErrors", [])[:5]:
+                print(f"       {err}")
+
+    # ── Step 2: batch-resolve ALL master _ids in ONE query ────────────
+    # Build a composite string key → (filter_key, [price_docs]) map
+    # so we can match returned documents back to their price records.
+    def _combo_key(fk: dict) -> str:
+        """Deterministic string key from a filter dict."""
+        return "||".join(str(fk.get(f) or "") for f in MASTER_KEY_FIELDS)
+
+    # Group price_ops_meta by combo key (multiple price docs can share one master)
+    combo_map: dict[str, dict]       = {}   # combo_key → filter_key
+    price_map: dict[str, list[dict]] = {}   # combo_key → list of price_docs
+
+    for filter_key, price_doc in price_ops_meta:
+        ck = _combo_key(filter_key)
+        combo_map[ck] = filter_key
+        price_map.setdefault(ck, []).append(price_doc)
+
+    # Fetch all matching master docs in a SINGLE round trip using $or
+    or_filters   = list(combo_map.values())
+    master_cursor = master_coll.find(
+        {"$or": or_filters},
+        projection={f: 1 for f in MASTER_KEY_FIELDS} | {"_id": 1},
+    )
+
+    # Build  combo_key → ObjectId  lookup dict from the results
+    id_lookup: dict[str, object] = {}
+    for mdoc in master_cursor:
+        ck = _combo_key(mdoc)
+        id_lookup[ck] = mdoc["_id"]
+
+    print(f"[INFO] Resolved {len(id_lookup)} master _ids in one query "
+          f"(out of {len(combo_map)} unique combos).")
+
+    # ── Step 3: build price upserts using the in-memory id_lookup ─────
+    price_ops = []
+    now_str   = datetime.now(tz=timezone.utc).isoformat()
+    unresolved = 0
+
+    for ck, pdocs in price_map.items():
+        mc_id = id_lookup.get(ck)
+        if mc_id is None:
+            unresolved += 1
+            continue
+
+        for price_doc in pdocs:
+            date_val = price_doc.get("date")
+            if not date_val:
+                continue
+
+            # Keep null fields explicit so documents have a consistent schema.
+            # min_price / max_price / market_id / commodity_alias_lookup_id
+            # must appear as null rather than be absent from the document.
+            clean_price = {
+                "market_commodity_id":       mc_id,
+                "date":                      date_val,
+                "market_id":                 price_doc.get("market_id"),
+                "commodity_alias_lookup_id": price_doc.get("commodity_alias_lookup_id"),
+                "arrival_quantity":          price_doc.get("arrival_quantity"),
+                "min_price":                 price_doc.get("min_price"),
+                "max_price":                 price_doc.get("max_price"),
+                "modal_price":               price_doc.get("modal_price"),
+                "ingested_at":               price_doc.get("ingested_at", now_str),
+            }
+
+            price_ops.append(UpdateOne(
+                {"market_commodity_id": mc_id, "date": date_val},
+                {"$set": clean_price},
+                upsert=True,
+            ))
+
+    if unresolved:
+        print(f"[WARN] {unresolved} combo(s) could not be resolved to a master _id — skipped.")
+
+    # ── Step 4: bulk upsert price records ─────────────────────────────
+    if price_ops:
+        try:
+            result = price_coll.bulk_write(price_ops, ordered=False)
+            print(f"[OK] price_records — upserted: {result.upserted_count}, "
+                  f"matched (updated): {result.matched_count}")
+        except BulkWriteError as bwe:
+            n_err = len(bwe.details.get("writeErrors", []))
+            print(f"[WARN] price_records bulk write had {n_err} error(s).")
+            for err in bwe.details.get("writeErrors", [])[:5]:
+                print(f"       {err}")
+
+    client.close()
+    print("[INFO] Connection closed.")
 
 
 # ─────────────────────────────────────────────
 # COMMODITY LOOKUP  (singleton client + cache)
 # ─────────────────────────────────────────────
 
-# Module-level MongoClient for the commodity alias lookup database.
-# MongoClient manages an internal connection pool; create it once and
-# reuse it for the lifetime of the process.
-_lookup_client: MongoClient | None = None
-_lookup_coll = None
-
-# Simple in-memory cache  { normalised_name -> crop_master_id | None }
-# Avoids a DB round-trip when the same commodity appears across many records.
+_lookup_client = None
+_lookup_coll   = None
 _commodity_id_cache: dict[str, str | None] = {}
+_commodity_alias_lookup_id_cache: dict[str, object | None] = {}
 
 
 def _get_lookup_collection(
@@ -636,14 +575,7 @@ def _get_lookup_collection(
     db_name: str   = DB_NAME,
     coll_name: str = "commodity_alias_lookup",
 ):
-    """Return the cached commodity lookup collection, initialising once if needed.
-
-    Returns ``None`` (instead of raising) when any of the required env vars
-    are missing or not a non-empty string — commodity_id lookups will then
-    simply return ``None`` without crashing the normalisation pipeline.
-    """
     global _lookup_client, _lookup_coll
-    # ── Guard: all three params must be non-empty strings ─────────────
     if not (isinstance(uri, str) and uri.strip() and
             isinstance(db_name, str) and db_name.strip() and
             isinstance(coll_name, str) and coll_name.strip()):
@@ -657,48 +589,23 @@ def _get_lookup_collection(
 
 
 def get_commodity_id(commodity_name: str) -> str | None:
-    """
-    Look up the ``crop_master_id`` for *commodity_name* using a single
-    persistent MongoDB connection (connection pool) + an in-memory cache.
-
-    Matching strategy
-    -----------------
-    1. Normalise the input to lower-case and check the in-memory cache
-       first — no DB hit if the same commodity was already resolved.
-    2. Look up the normalized commodity name in the ``aliases`` array
-       where ``crop_master_id`` is non-null.
-    3. If that fails, perform a case-insensitive regex match on ``aliases``
-       with a non-null ``crop_master_id``.
-    4. Cache the result (even ``None``) so repeated calls are O(1).
-
-    Returns
-    -------
-    str | None
-        The ``crop_master_id``, or ``None`` if no match / no id found.
-    """
+    """Return crop_master_id from commodity_alias_lookup for the given name."""
     if not isinstance(commodity_name, str) or not commodity_name.strip():
         return None
 
     key = commodity_name.strip().lower()
 
-    # ── Cache hit ──────────────────────────────────────────────────────
     if key in _commodity_id_cache:
         return _commodity_id_cache[key]
 
-    # ── DB lookup ──────────────────────────────────────────────────────
     try:
         coll = _get_lookup_collection()
         if coll is None:
-            # Lookup DB not configured; cache None to skip future lookups
             _commodity_id_cache[key] = None
             return None
 
-        # 1. Exact match on aliases array
         doc = coll.find_one(
-            {
-                "aliases": key,
-                "crop_master_id": {"$nin": [None, ""]},
-            },
+            {"aliases": key, "crop_master_id": {"$nin": [None, ""]}},
             projection={"crop_master_id": 1, "_id": 0},
         )
         if doc:
@@ -706,25 +613,159 @@ def get_commodity_id(commodity_name: str) -> str | None:
             _commodity_id_cache[key] = result
             return result
 
-        # 2. Fallback: regex search on aliases array
-        pattern = re.compile(re.escape(key), re.IGNORECASE)
+        pattern  = re.compile(re.escape(key), re.IGNORECASE)
         fallback = coll.find_one(
-            {
-                "aliases": {"$regex": pattern},
-                "crop_master_id": {"$nin": [None, ""]},
-            },
+            {"aliases": {"$regex": pattern}, "crop_master_id": {"$nin": [None, ""]}},
             projection={"crop_master_id": 1, "_id": 0},
         )
         result = fallback.get("crop_master_id") if fallback else None
-        _commodity_id_cache[key] = result   # cache None too — avoids re-querying
+        _commodity_id_cache[key] = result
         return result
     except Exception as exc:
-        # Never let a lookup failure crash the normalisation pipeline.
         print(f"[WARN] crop_master_id lookup failed for '{key}': {exc}")
         _commodity_id_cache[key] = None
         return None
 
 
+def get_commodity_alias_lookup_id(commodity_name: str) -> object | None:
+    """
+    Return the ObjectId (_id) of the commodity_alias_lookup document
+    that matches the given commodity name via its aliases array.
+    This is distinct from get_commodity_id() which returns crop_master_id.
+    """
+    if not isinstance(commodity_name, str) or not commodity_name.strip():
+        return None
+
+    key = commodity_name.strip().lower()
+
+    if key in _commodity_alias_lookup_id_cache:
+        return _commodity_alias_lookup_id_cache[key]
+
+    try:
+        coll = _get_lookup_collection()
+        if coll is None:
+            _commodity_alias_lookup_id_cache[key] = None
+            return None
+
+        # 1. Exact alias match
+        doc = coll.find_one(
+            {"aliases": key},
+            projection={"_id": 1},
+        )
+        if doc:
+            result = doc["_id"]
+            _commodity_alias_lookup_id_cache[key] = result
+            return result
+
+        # 2. Case-insensitive regex fallback
+        pattern  = re.compile(re.escape(key), re.IGNORECASE)
+        fallback = coll.find_one(
+            {"aliases": {"$regex": pattern}},
+            projection={"_id": 1},
+        )
+        result = fallback["_id"] if fallback else None
+        _commodity_alias_lookup_id_cache[key] = result
+        return result
+    except Exception as exc:
+        print(f"[WARN] commodity_alias_lookup _id lookup failed for '{key}': {exc}")
+        _commodity_alias_lookup_id_cache[key] = None
+        return None
+
+
+# ─────────────────────────────────────────────
+# MARKET LOOKUP  (singleton client + cache)
+# Looks up ALL_MANDI_COLLECTION by `name` first,
+# then falls back to the `aliases` array.
+# ─────────────────────────────────────────────
+
+_market_lookup_client = None
+_market_lookup_coll   = None
+_market_id_cache: dict[str, object | None] = {}
+
+
+def _get_market_lookup_collection(
+    uri: str       = MONGO_URI,
+    db_name: str   = DB_NAME,
+    coll_name: str = ALL_MANDI_COLLECTION,
+):
+    global _market_lookup_client, _market_lookup_coll
+    if not (isinstance(uri, str) and uri.strip() and
+            isinstance(db_name, str) and db_name.strip() and
+            isinstance(coll_name, str) and coll_name.strip()):
+        print("[WARN] Market lookup DB not configured — market_id lookups disabled.")
+        return None
+    if _market_lookup_coll is None:
+        _market_lookup_client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        _market_lookup_coll   = _market_lookup_client[db_name][coll_name]
+        print("[INFO] Market lookup client connected.")
+    return _market_lookup_coll
+
+
+def get_market_id(market_name: str, state: str | None = None) -> object | None:
+    """
+    Resolve a market name to its MongoDB _id from ALL_MANDI_COLLECTION.
+
+    Lookup order:
+      1. Exact match on `name`  (case-insensitive, optionally filtered by state)
+      2. Exact match on `aliases` array element
+      3. Regex fallback on `aliases` (for partial / title-case mismatches)
+
+    Results are cached in-process to avoid repeated round trips.
+    Returns the document's ObjectId, or None if not found.
+    """
+    if not isinstance(market_name, str) or not market_name.strip():
+        return None
+
+    key = market_name.strip().lower()
+    state_lower = state.strip().lower() if isinstance(state, str) and state.strip() else None
+    cache_key = f"{state_lower}||{key}" if state_lower else key
+
+    if cache_key in _market_id_cache:
+        return _market_id_cache[cache_key]
+
+    try:
+        coll = _get_market_lookup_collection()
+        if coll is None:
+            _market_id_cache[cache_key] = None
+            return None
+
+        state_filter = {"state": {"$regex": re.compile(re.escape(state_lower), re.IGNORECASE)}} \
+            if state_lower else {}
+
+        # 1. Exact match on `name`
+        doc = coll.find_one(
+            {"name": {"$regex": re.compile(f"^{re.escape(key)}$", re.IGNORECASE)},
+             **state_filter},
+            projection={"_id": 1},
+        )
+        if doc:
+            _market_id_cache[cache_key] = doc["_id"]
+            return doc["_id"]
+
+        # 2. Exact element match on `aliases`
+        doc = coll.find_one(
+            {"aliases": {"$regex": re.compile(f"^{re.escape(key)}$", re.IGNORECASE)},
+             **state_filter},
+            projection={"_id": 1},
+        )
+        if doc:
+            _market_id_cache[cache_key] = doc["_id"]
+            return doc["_id"]
+
+        # 3. Regex / partial match on `aliases` (looser fallback)
+        pattern  = re.compile(re.escape(key), re.IGNORECASE)
+        fallback = coll.find_one(
+            {"aliases": {"$regex": pattern}, **state_filter},
+            projection={"_id": 1},
+        )
+        result = fallback["_id"] if fallback else None
+        _market_id_cache[cache_key] = result
+        return result
+
+    except Exception as exc:
+        print(f"[WARN] market_id lookup failed for '{key}' (state={state_lower}): {exc}")
+        _market_id_cache[cache_key] = None
+        return None
 
 
 # ─────────────────────────────────────────────

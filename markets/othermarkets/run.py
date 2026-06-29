@@ -250,7 +250,7 @@ async def fetch_karnataka_state_daily(
             await expect_navigation_with_fallback(
                 page,
                 _KARNATAKA_GOTO_TIMEOUT,
-                page.locator("#_ctl0_MainContent_BtnRep").click()
+                lambda: page.locator("#_ctl0_MainContent_BtnRep").click()
             )
 
             # ============ LOAD ALL RECORDS (with fallback navigation) ============
@@ -258,7 +258,7 @@ async def fetch_karnataka_state_daily(
             await expect_navigation_with_fallback(
                 page,
                 _KARNATAKA_GOTO_TIMEOUT,
-                page.locator("#_ctl0_MainContent_lbtn_all").click()
+                lambda: page.locator("#_ctl0_MainContent_lbtn_all").click()
             )
 
             # ============ EXTRACT HTML ============
