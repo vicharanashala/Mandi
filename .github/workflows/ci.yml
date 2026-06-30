@@ -34,6 +34,17 @@ jobs:
             -e ALL_MANDI_COLLECTION="${{ secrets.ALL_MANDI_COLLECTION }}" \
             my-app python main.py
 
+      - name: Run check_db.py in Docker
+        run: |
+          docker run --rm \
+            -e MONGO_URI="${{ secrets.MONGO_URI }}" \
+            -e MANDI_DB_NAME="${{ secrets.MANDI_DB_NAME }}" \
+            -e PRICE_COLLECTION="${{ secrets.PRICE_COLLECTION }}" \
+            -e MASTER_COLLECTION="${{ secrets.MASTER_COLLECTION }}" \
+            -e ALL_MANDI_COLLECTION="${{ secrets.ALL_MANDI_COLLECTION }}" \
+            -e GOOGLE_MAPS_API_KEY="${{ secrets.GOOGLE_MAPS_API_KEY }}" \
+            my-app python check_db.py
+
   # ── JOB 2: Runs on schedule OR manual trigger ─────────────
   scheduled-run:
     runs-on: ubuntu-latest
@@ -58,3 +69,14 @@ jobs:
             -e COLLECTION_ANNAM="${{ secrets.COLLECTION_ANNAM }}" \
             -e ALL_MANDI_COLLECTION="${{ secrets.ALL_MANDI_COLLECTION }}" \
             my-app python main.py
+
+      - name: Run check_db.py in Docker
+        run: |
+          docker run --rm \
+            -e MONGO_URI="${{ secrets.MONGO_URI }}" \
+            -e MANDI_DB_NAME="${{ secrets.MANDI_DB_NAME }}" \
+            -e PRICE_COLLECTION="${{ secrets.PRICE_COLLECTION }}" \
+            -e MASTER_COLLECTION="${{ secrets.MASTER_COLLECTION }}" \
+            -e ALL_MANDI_COLLECTION="${{ secrets.ALL_MANDI_COLLECTION }}" \
+            -e GOOGLE_MAPS_API_KEY="${{ secrets.GOOGLE_MAPS_API_KEY }}" \
+            my-app python check_db.py
