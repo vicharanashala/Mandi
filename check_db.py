@@ -70,9 +70,10 @@ def main():
     print(f"[INFO] {len(unique_mandis)} unique (state, market_name) pair(s) to process.\n")
 
     # ── Step 3: For each unique mandi, geocode → insert → backfill ────
-    created  = 0
-    skipped  = 0
-    failed   = 0
+    created       = 0
+    skipped       = 0
+    failed        = 0
+    manual_linked = 0
 
     for (state, market_name), mc_ids in unique_mandis.items():
         print(f"─── Processing: {market_name} ({state}) ───")
@@ -92,30 +93,64 @@ def main():
             # 3b. Geocode the mandi
             geo_doc = get_mandi_geo_doc(market_name, state)
             if geo_doc is None:
-                print(f"  [FAIL] Geocoding failed — skipping this mandi.")
-                failed += 1
-                continue
+                print(f"  [FAIL] Geocoding failed — trying manual-entry fallback.")
 
-            # 3c. Insert into available_mandi (handle duplicate key race)
-            try:
-                result = mandi_col.insert_one(geo_doc)
-                mandi_id = result.inserted_id
-                print(f"  [NEW] Inserted into available_mandi → _id = {mandi_id}")
-                created += 1
-            except DuplicateKeyError:
-                # Another doc with same (state, name) exists — fetch its _id
-                existing = mandi_col.find_one(
-                    {"state": geo_doc["state"], "name": geo_doc["name"]},
-                    {"_id": 1},
-                )
-                if existing:
-                    mandi_id = existing["_id"]
-                    print(f"  [DUP] Already exists (unique index) → _id = {mandi_id}")
-                    skipped += 1
+                # 3b-fallback: search available_mandi by name (also check aliases)
+                #   using a word-boundary-tolerant regex so partial names still match.
+                name_pattern = re.compile(re.escape(market_name), re.IGNORECASE)
+                state_pattern = re.compile(f"^{re.escape(state)}$", re.IGNORECASE)
+                fallback = mandi_col.find_one({
+                    "$or": [
+                        {"name":    name_pattern},
+                        {"aliases": name_pattern},
+                    ],
+                    "state": state_pattern,
+                })
+
+                if fallback is None:
+                    # Try without state constraint as a last resort
+                    fallback = mandi_col.find_one({
+                        "$or": [
+                            {"name":    name_pattern},
+                            {"aliases": name_pattern},
+                        ],
+                    })
+                    if fallback:
+                        print(f"  [FALLBACK] Found in available_mandi (state mismatch) "
+                              f"→ name='{fallback.get('name')}' state='{fallback.get('state')}' "
+                              f"_id={fallback['_id']}")
+
+                if fallback:
+                    mandi_id = fallback["_id"]
+                    if not fallback or fallback.get("state", "").lower() == state:
+                        print(f"  [FALLBACK] Found manually-added entry in available_mandi "
+                              f"→ _id = {mandi_id}")
+                    manual_linked += 1
                 else:
-                    print(f"  [ERROR] DuplicateKeyError but doc not found — skipping.")
+                    print(f"  [FAIL] No manual entry found either — skipping.")
                     failed += 1
                     continue
+            else:
+                # 3c. Insert into available_mandi (handle duplicate key race)
+                try:
+                    result = mandi_col.insert_one(geo_doc)
+                    mandi_id = result.inserted_id
+                    print(f"  [NEW] Inserted into available_mandi → _id = {mandi_id}")
+                    created += 1
+                except DuplicateKeyError:
+                    # Another doc with same (state, name) exists — fetch its _id
+                    existing = mandi_col.find_one(
+                        {"state": geo_doc["state"], "name": geo_doc["name"]},
+                        {"_id": 1},
+                    )
+                    if existing:
+                        mandi_id = existing["_id"]
+                        print(f"  [DUP] Already exists (unique index) → _id = {mandi_id}")
+                        skipped += 1
+                    else:
+                        print(f"  [ERROR] DuplicateKeyError but doc not found — skipping.")
+                        failed += 1
+                        continue
 
         # 3d. Update market_id in all matching markets_commodities docs
         mc_result = master_col.update_many(
@@ -134,9 +169,10 @@ def main():
 
     # ── Summary ───────────────────────────────────────────────────────
     print("=" * 50)
-    print(f"[DONE] Created {created} new mandi(s) in available_mandi.")
-    print(f"       Skipped {skipped} (already existed).")
-    print(f"       Failed  {failed} (geocoding error).")
+    print(f"[DONE] Created       {created} new mandi(s) in available_mandi.")
+    print(f"       Skipped       {skipped} (already existed).")
+    print(f"       Manual-linked {manual_linked} (geocoding failed, found manually-added entry).")
+    print(f"       Failed        {failed} (geocoding error, no manual entry found).")
     print("=" * 50)
 
     client.close()
