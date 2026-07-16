@@ -535,6 +535,12 @@ def upload_to_mongo(
                 "ingested_at":               price_doc.get("ingested_at", now_str),
             }
 
+            # Skip records where all three price fields are null — nothing useful to store.
+            if (clean_price["modal_price"] is None
+                    and clean_price["min_price"] is None
+                    and clean_price["max_price"] is None):
+                continue
+
             price_ops.append(UpdateOne(
                 {"market_commodity_id": mc_id, "date": date_val},
                 {"$set": clean_price},
