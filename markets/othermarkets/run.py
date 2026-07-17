@@ -31,6 +31,7 @@ Usage
 import asyncio
 import json
 import logging
+import os
 from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
@@ -215,18 +216,27 @@ async def fetch_karnataka_state_daily(
                     "--disable-setuid-sandbox",
                     "--disable-extensions",
                     "--single-process",
-                    "--disable-blink-features=AutomationControlled",  # Prevent automation detection
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-features=site-per-process",
+                    "--window-size=1440,1200",
                 ],
             )
 
             context = await browser.new_context(
+                viewport={"width": 1440, "height": 1200},
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/120.0.0.0 Safari/537.36"
-                )
+                ),
+                ignore_https_errors=True,
+                java_script_enabled=True,
             )
             page = await context.new_page()
+            page.set_default_timeout(90_000)
+            await page.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            )
 
             # ============ INITIAL PAGE LOAD (with fallback) ============
             logger.debug(f"[Karnataka] Navigating to main report page for {date_str}...")
@@ -235,31 +245,50 @@ async def fetch_karnataka_state_daily(
                 "https://krama.karnataka.gov.in/Reports/Main_rep",
                 _KARNATAKA_GOTO_TIMEOUT
             )
+            await page.wait_for_load_state("networkidle", timeout=90_000)
+
+            # ============ VERIFY THE PAGE IS READY ============
+            date_field = page.locator("#_ctl0_MainContent_TxtDate")
+            radio = page.locator("input[name='_ctl0:MainContent:RadBtnSel'][value='S']")
+            view_button = page.locator("#_ctl0_MainContent_BtnRep")
+            all_button = page.locator("#_ctl0_MainContent_lbtn_all")
+
+            await date_field.wait_for(timeout=90_000)
+            await radio.wait_for(timeout=90_000)
+            await view_button.wait_for(timeout=90_000)
+
+            # Some CI environments receive a challenge page or a slower-rendered DOM.
+            # If the site blocks the browser, fail with a clear message instead of
+            # silently timing out on the first click.
+            page_text = (await page.content()).lower()
+            if any(token in page_text for token in ["captcha", "verify you are human", "access denied"]):
+                raise RuntimeError("Karnataka site challenged the browser session (captcha / anti-bot page)")
 
             # ============ FILL FORM FIELDS ============
             logger.debug("[Karnataka] Filling date field...")
-            await page.locator("#_ctl0_MainContent_TxtDate").fill(date_str)
+            await date_field.fill(date_str)
 
             logger.debug("[Karnataka] Selecting 'State Level Daily Report'...")
-            await page.locator(
-                "input[name='_ctl0:MainContent:RadBtnSel'][value='S']"
-            ).check()
+            await radio.check()
 
             # ============ VIEW REPORT (with fallback navigation) ============
             logger.debug("[Karnataka] Clicking 'View Report'...")
             await expect_navigation_with_fallback(
                 page,
                 _KARNATAKA_GOTO_TIMEOUT,
-                lambda: page.locator("#_ctl0_MainContent_BtnRep").click()
+                lambda: view_button.click(timeout=90_000)
             )
+            await page.wait_for_load_state("networkidle", timeout=90_000)
 
             # ============ LOAD ALL RECORDS (with fallback navigation) ============
             logger.debug("[Karnataka] Clicking 'All' to load all records...")
+            await all_button.wait_for(timeout=90_000)
             await expect_navigation_with_fallback(
                 page,
                 _KARNATAKA_GOTO_TIMEOUT,
-                lambda: page.locator("#_ctl0_MainContent_lbtn_all").click()
+                lambda: all_button.click(timeout=90_000)
             )
+            await page.wait_for_load_state("networkidle", timeout=90_000)
 
             # ============ EXTRACT HTML ============
             html_content = await page.content()
