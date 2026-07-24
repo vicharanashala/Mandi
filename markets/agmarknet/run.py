@@ -24,17 +24,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 BASE_URL = os.getenv("AGMARKNET_BASE_URL", "https://api.agmarknet.gov.in/v1").rstrip("/")
 TIMEOUT_SECONDS = float(os.getenv("AGMARKNET_TIMEOUT_SECONDS", "30"))
-MAX_RETRIES = int(os.getenv("AGMARKNET_MAX_RETRIES", "5"))
-INITIAL_BACKOFF = float(os.getenv("AGMARKNET_INITIAL_BACKOFF", "1.0"))
+MAX_RETRIES = int(os.getenv("AGMARKNET_MAX_RETRIES", "3"))
+INITIAL_BACKOFF = float(os.getenv("AGMARKNET_INITIAL_BACKOFF", "10.0"))
 
 DASHBOARD = "marketwise_price_arrival"
 PAGE_SIZE = 10
 
 # How many market requests to run in parallel
-CONCURRENCY = int(os.getenv("AGMARKNET_CONCURRENCY", "4"))
+CONCURRENCY = int(os.getenv("AGMARKNET_CONCURRENCY", "1"))
 
 # Polite delay each worker waits after completing a request (seconds)
-PAGE_DELAY = float(os.getenv("AGMARKNET_PAGE_DELAY", "0.25"))
+PAGE_DELAY = float(os.getenv("AGMARKNET_PAGE_DELAY", "3.0"))
 
 # agmarknet_filters.json (market list and state names)
 FILTERS_FILE = Path(__file__).resolve().parents[2] / "agmarknet_filters.json"
@@ -86,13 +86,13 @@ HEADERS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_retry_delay(response: httpx.Response | None, attempt: int, initial_backoff: float) -> float:
-    """Return a sleep delay for transient failures, honoring Retry-After when present."""
+def _get_retry_delay(response: httpx.Response | None, attempt: int, initial_backoff: float, status: int | None = None) -> float:
+    """Return a sleep delay for transient failures, honoring Retry-After and enforcing a safe floor for 429s."""
     if response is not None:
         retry_after = response.headers.get("retry-after")
         if retry_after:
             try:
-                return max(float(retry_after), 0.0)
+                return max(float(retry_after), 20.0 if status == 429 else 0.0)
             except ValueError:
                 pass
             try:
@@ -101,9 +101,12 @@ def _get_retry_delay(response: httpx.Response | None, attempt: int, initial_back
                     if parsed.tzinfo is None:
                         parsed = parsed.replace(tzinfo=timezone.utc)
                     delta = (parsed - datetime.now(timezone.utc)).total_seconds()
-                    return max(delta, 0.0)
+                    return max(delta, 20.0 if status == 429 else 0.0)
             except (TypeError, ValueError, OverflowError):
                 pass
+
+    if status == 429:
+        return max(initial_backoff * (2**attempt) + 10.0, 20.0)
 
     cap = initial_backoff * (2**attempt)
     return random.uniform(0, cap)
@@ -127,7 +130,7 @@ async def _retry_with_backoff(func, *args, max_retries: int = MAX_RETRIES, **kwa
             if status == 429 or (status is not None and 500 <= status < 600):
                 last_exception = exc
                 if attempt < max_retries - 1:
-                    delay = _get_retry_delay(exc.response, attempt, INITIAL_BACKOFF)
+                    delay = _get_retry_delay(exc.response, attempt, INITIAL_BACKOFF, status)
                     logger.warning(
                         "HTTP %s – retry %s/%s after %.2fs",
                         status,
@@ -319,7 +322,7 @@ async def agmarknet(date: str | None = None, concurrency: int = CONCURRENCY) -> 
     async with httpx.AsyncClient(
         timeout=TIMEOUT_SECONDS,
         headers=HEADERS,
-        limits=httpx.Limits(max_connections=concurrency + 5, max_keepalive_connections=concurrency),
+        limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
     ) as client:
         tasks = [
             fetch_market(market, date, client, sem, counter, total)
