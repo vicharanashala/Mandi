@@ -3,7 +3,8 @@ import json
 import logging
 import os
 import random
-from datetime import date as date_type
+from datetime import date as date_type, datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,10 +31,10 @@ DASHBOARD = "marketwise_price_arrival"
 PAGE_SIZE = 10
 
 # How many market requests to run in parallel
-CONCURRENCY = int(os.getenv("AGMARKNET_CONCURRENCY", "20"))
+CONCURRENCY = int(os.getenv("AGMARKNET_CONCURRENCY", "4"))
 
 # Polite delay each worker waits after completing a request (seconds)
-PAGE_DELAY = float(os.getenv("AGMARKNET_PAGE_DELAY", "0.1"))
+PAGE_DELAY = float(os.getenv("AGMARKNET_PAGE_DELAY", "0.25"))
 
 # agmarknet_filters.json (market list and state names)
 FILTERS_FILE = Path(__file__).resolve().parents[2] / "agmarknet_filters.json"
@@ -85,6 +86,29 @@ HEADERS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _get_retry_delay(response: httpx.Response | None, attempt: int, initial_backoff: float) -> float:
+    """Return a sleep delay for transient failures, honoring Retry-After when present."""
+    if response is not None:
+        retry_after = response.headers.get("retry-after")
+        if retry_after:
+            try:
+                return max(float(retry_after), 0.0)
+            except ValueError:
+                pass
+            try:
+                parsed = parsedate_to_datetime(retry_after)
+                if parsed is not None:
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    delta = (parsed - datetime.now(timezone.utc)).total_seconds()
+                    return max(delta, 0.0)
+            except (TypeError, ValueError, OverflowError):
+                pass
+
+    cap = initial_backoff * (2**attempt)
+    return random.uniform(0, cap)
+
+
 async def _retry_with_backoff(func, *args, max_retries: int = MAX_RETRIES, **kwargs):
     """Retry *func* with exponential back-off on transient HTTP / network errors.
 
@@ -103,12 +127,15 @@ async def _retry_with_backoff(func, *args, max_retries: int = MAX_RETRIES, **kwa
             if status == 429 or (status is not None and 500 <= status < 600):
                 last_exception = exc
                 if attempt < max_retries - 1:
-                    cap = INITIAL_BACKOFF * (2 ** attempt)
-                    backoff = random.uniform(0, cap)
+                    delay = _get_retry_delay(exc.response, attempt, INITIAL_BACKOFF)
                     logger.warning(
-                        "HTTP %s – retry %s/%s after %.2fs (jitter)", status, attempt + 1, max_retries, backoff
+                        "HTTP %s – retry %s/%s after %.2fs",
+                        status,
+                        attempt + 1,
+                        max_retries,
+                        delay,
                     )
-                    await asyncio.sleep(backoff)
+                    await asyncio.sleep(delay)
                     continue
                 break
             raise

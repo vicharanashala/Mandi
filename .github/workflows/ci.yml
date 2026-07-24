@@ -32,6 +32,8 @@ jobs:
             -e MANDI_DB_NAME_ANNAM="${{ secrets.MANDI_DB_NAME_ANNAM }}" \
             -e COLLECTION_ANNAM="${{ secrets.COLLECTION_ANNAM }}" \
             -e ALL_MANDI_COLLECTION="${{ secrets.ALL_MANDI_COLLECTION }}" \
+            -e AGMARKNET_CONCURRENCY=2 \
+            -e AGMARKNET_PAGE_DELAY=0.5 \
             my-app python main.py
 
       - name: Run check_db.py in Docker
@@ -68,6 +70,8 @@ jobs:
             -e MANDI_DB_NAME_ANNAM="${{ secrets.MANDI_DB_NAME_ANNAM }}" \
             -e COLLECTION_ANNAM="${{ secrets.COLLECTION_ANNAM }}" \
             -e ALL_MANDI_COLLECTION="${{ secrets.ALL_MANDI_COLLECTION }}" \
+            -e AGMARKNET_CONCURRENCY=2 \
+            -e AGMARKNET_PAGE_DELAY=0.5 \
             my-app python main.py
 
       - name: Run check_db.py in Docker
