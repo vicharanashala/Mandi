@@ -2,7 +2,7 @@ name: CI Pipeline
 
 on:
   schedule:
-    - cron: '15 * * * *'   # every 10 mins
+    - cron: '15 */2 * * *'   # every 2 hours (at :15 past)
   workflow_dispatch:
   push:
     branches:
@@ -12,7 +12,7 @@ jobs:
   # ── JOB 1: Runs only on push ──────────────────────────────
   docker-build-and-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     if: github.event_name == 'push'
 
     steps:
@@ -32,8 +32,8 @@ jobs:
             -e MANDI_DB_NAME_ANNAM="${{ secrets.MANDI_DB_NAME_ANNAM }}" \
             -e COLLECTION_ANNAM="${{ secrets.COLLECTION_ANNAM }}" \
             -e ALL_MANDI_COLLECTION="${{ secrets.ALL_MANDI_COLLECTION }}" \
-            -e AGMARKNET_CONCURRENCY=2 \
-            -e AGMARKNET_PAGE_DELAY=0.5 \
+            -e AGMARKNET_CONCURRENCY=1 \
+            -e AGMARKNET_PAGE_DELAY=3.0 \
             my-app python main.py
 
       - name: Run check_db.py in Docker
@@ -50,7 +50,7 @@ jobs:
   # ── JOB 2: Runs on schedule OR manual trigger ─────────────
   scheduled-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     if: github.event_name != 'push'
 
     steps:
@@ -71,7 +71,9 @@ jobs:
             -e COLLECTION_ANNAM="${{ secrets.COLLECTION_ANNAM }}" \
             -e ALL_MANDI_COLLECTION="${{ secrets.ALL_MANDI_COLLECTION }}" \
             -e AGMARKNET_CONCURRENCY=2 \
-            -e AGMARKNET_PAGE_DELAY=0.5 \
+            -e AGMARKNET_PAGE_DELAY=2.0 \
+            -e AGMARKNET_MAX_RETRIES=5 \
+            -e AGMARKNET_INITIAL_BACKOFF=15.0 \
             my-app python main.py
 
       - name: Run check_db.py in Docker
