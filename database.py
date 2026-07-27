@@ -242,14 +242,39 @@ def _norm_agmarknet(record: dict, state: str) -> dict:
     )
 
 
+def _norm_andhra_pradesh(record: dict, state: str) -> dict:
+    market_name = _lower(record.get("mandi"))
+    ap_source = sources.get("andhra_pradesh", {})
+    return dict(
+        source_system              = "agriculture.ap.gov.in",
+        state                      = state.lower(),
+        date                       = _parse_date(record.get("tranDate")),
+        market_name                = market_name,
+        market_id                  = get_market_id(market_name, state),
+        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("commodity"))),
+        commodity_group            = None,
+        commodity_name             = _lower(record.get("commodity")),
+        variety                    = _lower(record.get("variety")),
+        grade                      = None,
+        arrival_quantity           = _to_float(record.get("arrivalQty")),
+        min_price                  = _to_float(record.get("minPrice")),
+        max_price                  = _to_float(record.get("maxPrice")),
+        modal_price                = _to_float(record.get("modalPrice")),
+        source_url                 = ap_source.get("url", "https://agriculture.ap.gov.in/staging/api/emarket/getMarketPriceData"),
+        method                     = ap_source.get("method", "external_apis"),
+        source_name                = ap_source.get("source_name", "state_level_website"),
+    )
+
+
 STATE_NORMALISERS = {
-    "Karnataka":     _norm_karnataka,
-    "Meghalaya":     _norm_meghalaya,
-    "Nagaland":      _norm_nagaland,
-    "Maharashtra":   _norm_maharashtra,
-    "Uttar Pradesh": _norm_uttar_pradesh,
-    "Punjab":        _norm_punjab,
-    "agmarknet":     _norm_agmarknet,
+    "Karnataka":      _norm_karnataka,
+    "Meghalaya":      _norm_meghalaya,
+    "Nagaland":       _norm_nagaland,
+    "Maharashtra":    _norm_maharashtra,
+    "Uttar Pradesh":  _norm_uttar_pradesh,
+    "Punjab":         _norm_punjab,
+    "agmarknet":      _norm_agmarknet,
+    "Andhra Pradesh": _norm_andhra_pradesh,
 }
 
 

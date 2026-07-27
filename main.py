@@ -280,11 +280,11 @@ def step6_upload(merged: dict) -> None:
 # MAIN async pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def run_pipeline(date_str: str = "") -> None:
+async def run_pipeline(date_str: str = "", skip_agmarknet: bool = False) -> None:
     """
     Execute the full end-to-end pipeline:
-    1. Refresh Agmarknet filters
-    2. Scrape Agmarknet (async)
+    1. Refresh Agmarknet filters (skipped if skip_agmarknet is True)
+    2. Scrape Agmarknet (async) (skipped if skip_agmarknet is True)
     3. Scrape other state markets (async)
     4. Merge all data
     5. Save to final_data.json
@@ -295,16 +295,21 @@ async def run_pipeline(date_str: str = "") -> None:
     logger.info("  APMC Mandi Scraper Pipeline — started %s", start.strftime("%Y-%m-%d %H:%M:%S"))
     logger.info("━" * 60)
 
-    # Step 1 — sync; run before anything async
-    step1_refresh_agmarknet_filters()
+    if skip_agmarknet:
+        logger.info("Skipping Agmarknet filter refresh and scrape (skip_agmarknet=True) …")
+        agmarknet_records = []
+        other_markets = await step3_scrape_other_markets(date_str=date_str)
+    else:
+        # Step 1 — sync; run before anything async
+        step1_refresh_agmarknet_filters()
 
-    # Steps 2 & 3 run CONCURRENTLY (both are async)
-    logger.info("Running Agmarknet and other-state scrapers in parallel …")
-    agmarknet_records, other_markets = await asyncio.gather(
-        step2_scrape_agmarknet(),
-        step3_scrape_other_markets(date_str=date_str),
-        return_exceptions=False,   # let exceptions propagate to top-level handler
-    )
+        # Steps 2 & 3 run CONCURRENTLY (both are async)
+        logger.info("Running Agmarknet and other-state scrapers in parallel …")
+        agmarknet_records, other_markets = await asyncio.gather(
+            step2_scrape_agmarknet(),
+            step3_scrape_other_markets(date_str=date_str),
+            return_exceptions=False,   # let exceptions propagate to top-level handler
+        )
 
     # If a step returned an exception object (shouldn't happen here), normalise
     if isinstance(agmarknet_records, BaseException):
@@ -334,8 +339,18 @@ async def run_pipeline(date_str: str = "") -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="APMC Mandi Scraper Pipeline")
+    parser.add_argument("--date", type=str, default="", help="Date string (DD/MM/YYYY or YYYY-MM-DD)")
+    parser.add_argument(
+        "--skip-agmarknet",
+        action="store_true",
+        help="Skip Agmarknet filter refresh and scrape for testing",
+    )
+    args = parser.parse_args()
+
     try:
-        asyncio.run(run_pipeline())
+        asyncio.run(run_pipeline(date_str=args.date, skip_agmarknet=args.skip_agmarknet))
     except KeyboardInterrupt:
         logger.warning("Pipeline interrupted by user (KeyboardInterrupt).")
     except Exception as exc:

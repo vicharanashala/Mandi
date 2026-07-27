@@ -15,6 +15,7 @@ States covered
 4. Nagaland       – Playwright (async) → commodityonline.com
 5. Punjab         – requests (sync)    → api.emandikaran-pb.in
 6. Uttar Pradesh  – requests (sync)    → upkrishivipran.in
+7. Andhra Pradesh – requests (sync)    → agriculture.ap.gov.in
 
 Usage
 -----
@@ -905,6 +906,166 @@ async def uttarpradesh_mandi() -> list[dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 7. ANDHRA PRADESH  (Sync / requests)
+# Source : https://agriculture.ap.gov.in/staging/api/emarket/getMarketPriceData
+# Method : POST request with date range timestamps → JSON response.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def andhra_pradesh_mandi(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    days_back: int = 30,
+) -> list[dict]:
+    """
+    Fetch Andhra Pradesh mandi price data from the agriculture.ap.gov.in API.
+
+    Parameters
+    ----------
+    start_date : str, optional
+        Start date formatted or timestamp (in ms). If None, defaults to `days_back` prior.
+    end_date : str, optional
+        End date formatted or timestamp (in ms). If None, defaults to current time.
+    days_back : int, optional
+        Number of days to fetch backwards if start_date is not specified. Default 30.
+
+    Returns
+    -------
+    list[dict]
+        List of flattened commodity records across mandis in Andhra Pradesh.
+    """
+    url = "https://agriculture.ap.gov.in/staging/api/emarket/getMarketPriceData"
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://agriculture.ap.gov.in",
+        "Referer": "https://agriculture.ap.gov.in/home",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/150.0.0.0 Safari/537.36"
+        ),
+    }
+
+    import time
+
+    now_ms = int(time.time() * 1000)
+
+    # Calculate end timestamp in ms
+    if not end_date:
+        end_ms = now_ms
+    elif isinstance(end_date, (int, float)):
+        end_ms = int(end_date)
+    elif str(end_date).isdigit():
+        end_ms = int(end_date)
+    else:
+        try:
+            dt = datetime.strptime(str(end_date), "%Y-%m-%d")
+            end_ms = int(dt.timestamp() * 1000)
+        except ValueError:
+            try:
+                dt = datetime.strptime(str(end_date), "%d/%m/%Y")
+                end_ms = int(dt.timestamp() * 1000)
+            except ValueError:
+                end_ms = now_ms
+
+    # Calculate start timestamp in ms
+    if not start_date:
+        start_ms = end_ms - (days_back * 24 * 3600 * 1000)
+    elif isinstance(start_date, (int, float)):
+        start_ms = int(start_date)
+    elif str(start_date).isdigit():
+        start_ms = int(start_date)
+    else:
+        try:
+            dt = datetime.strptime(str(start_date), "%Y-%m-%d")
+            start_ms = int(dt.timestamp() * 1000)
+        except ValueError:
+            try:
+                dt = datetime.strptime(str(start_date), "%d/%m/%Y")
+                start_ms = int(dt.timestamp() * 1000)
+            except ValueError:
+                start_ms = end_ms - (days_back * 24 * 3600 * 1000)
+
+    payload = {
+        "apmcList": [],
+        "commoditiesList": [],
+        "startDate": start_ms,
+        "endDate": end_ms,
+        "source": "AGRIWATCH_MARKET_PRICE",
+        "stateUUID": "1b62503c-0355-4222-8712-80e1e1d29445",
+    }
+
+    _AP_TIMEOUT = 60
+    _AP_RETRIES = 3
+
+    for attempt in range(1, _AP_RETRIES + 1):
+        try:
+            logger.info(
+                f"[Andhra Pradesh] Fetching market price data (attempt {attempt}/{_AP_RETRIES})"
+            )
+            response = requests.post(
+                url, headers=headers, json=payload, timeout=_AP_TIMEOUT, verify=False
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            if not data.get("result"):
+                logger.warning(
+                    f"[Andhra Pradesh] API returned result=False or error: {data.get('message')}"
+                )
+                return []
+
+            response_obj = data.get("response", {})
+            extracted_records = []
+
+            for loc_uuid, loc_data in response_obj.items():
+                if not isinstance(loc_data, dict):
+                    continue
+                lat = loc_data.get("latitude")
+                lon = loc_data.get("longitude")
+                for date_key, date_data in loc_data.items():
+                    if date_key in ("latitude", "longitude"):
+                        continue
+                    if isinstance(date_data, dict):
+                        for comm_uuid, comm_list in date_data.items():
+                            if isinstance(comm_list, list):
+                                for item in comm_list:
+                                    if isinstance(item, dict):
+                                        record = dict(item)
+                                        if lat is not None:
+                                            record["latitude"] = lat
+                                        if lon is not None:
+                                            record["longitude"] = lon
+                                        extracted_records.append(record)
+
+            logger.info(
+                f"[Andhra Pradesh] Successfully extracted {len(extracted_records)} records"
+            )
+            return extracted_records
+
+        except requests.RequestException as e:
+            logger.error(
+                f"[Andhra Pradesh] Network error (attempt {attempt}): {e}", exc_info=True
+            )
+            if attempt == _AP_RETRIES:
+                return []
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"[Andhra Pradesh] Failed to parse JSON response: {e}", exc_info=True
+            )
+            return []
+        except Exception as e:
+            logger.error(
+                f"[Andhra Pradesh] Unexpected error (attempt {attempt}): {e}",
+                exc_info=True,
+            )
+            if attempt == _AP_RETRIES:
+                return []
+
+    return []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ORCHESTRATOR — runs all scrapers concurrently
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -913,7 +1074,7 @@ async def run_all_scrapers(date_str: str = "") -> dict[str, Any]:
     Execute all state scrapers concurrently and return aggregated results.
 
     - Async scrapers (Karnataka, Nagaland) run as native coroutines.
-    - Sync scrapers (Maharashtra, Meghalaya, Punjab, UP) are wrapped in
+    - Sync scrapers (Karnataka, Maharashtra, Meghalaya, Nagaland, Punjab, Uttar Pradesh, Andhra Pradesh.) wrapped in
       ``asyncio.to_thread`` so they don't block the event loop.
 
     Parameters
@@ -963,6 +1124,11 @@ async def run_all_scrapers(date_str: str = "") -> dict[str, Any]:
     )
     punjab_task = asyncio.to_thread(punjab_mandi)
     up_task     = uttarpradesh_mandi()
+    ap_task     = asyncio.to_thread(
+        andhra_pradesh_mandi,
+        start_date=None,
+        end_date=date_str if date_str else None,
+    )
 
     # ── Gather all results; return_exceptions=True so one failure doesn't
     #    cancel the rest ─────────────────────────────────────────────────────
@@ -974,6 +1140,7 @@ async def run_all_scrapers(date_str: str = "") -> dict[str, Any]:
         meghalaya_task,
         punjab_task,
         up_task,
+        ap_task,
         return_exceptions=True,
     )
 
@@ -984,6 +1151,7 @@ async def run_all_scrapers(date_str: str = "") -> dict[str, Any]:
         "Meghalaya",
         "Punjab",
         "Uttar Pradesh",
+        "Andhra Pradesh",
     ]
 
     results: dict[str, Any] = {}

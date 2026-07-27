@@ -33,6 +33,10 @@ sources = {
         "url": "https://api.agmarknet.gov.in/v1",
         "method":"external_apis",
         "source_name":"agmarknet"
+    },
+    "andhra_pradesh":{
+        "url":"https://agriculture.ap.gov.in/staging/api/emarket/getMarketPriceData",
+        "method":"external_apis",
+        "source_name":"state_level_website"
     }
-    
 }

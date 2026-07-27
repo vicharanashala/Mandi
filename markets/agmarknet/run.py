@@ -34,7 +34,7 @@ PAGE_SIZE = 10
 CONCURRENCY = int(os.getenv("AGMARKNET_CONCURRENCY", "1"))
 
 # Polite delay each worker waits after completing a request (seconds)
-PAGE_DELAY = float(os.getenv("AGMARKNET_PAGE_DELAY", "3.0"))
+PAGE_DELAY = float(os.getenv("AGMARKNET_PAGE_DELAY", "5.0"))
 
 # agmarknet_filters.json (market list and state names)
 FILTERS_FILE = Path(__file__).resolve().parents[2] / "agmarknet_filters.json"

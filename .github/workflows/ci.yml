@@ -2,7 +2,7 @@ name: CI Pipeline
 
 on:
   schedule:
-    - cron: '15 */2 * * *'   # every 2 hours (at :15 past)
+    - cron: '0 */8 * * *'   # every 6 hours
   workflow_dispatch:
   push:
     branches:
@@ -12,7 +12,7 @@ jobs:
   # ── JOB 1: Runs only on push ──────────────────────────────
   docker-build-and-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 420
     if: github.event_name == 'push'
 
     steps:
@@ -50,7 +50,7 @@ jobs:
   # ── JOB 2: Runs on schedule OR manual trigger ─────────────
   scheduled-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 420
     if: github.event_name != 'push'
 
     steps:
