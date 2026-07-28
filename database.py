@@ -219,23 +219,44 @@ def _norm_punjab(record: dict, state: str) -> dict:
 
 
 def _norm_agmarknet(record: dict, state: str) -> dict:
-    record_state = record.get("state") or state
-    market_name  = _lower(record.get("market"))
+    # Support both the new data.gov.in field names (PascalCase) and the
+    # legacy agmarknet API field names (lowercase) for backwards compatibility.
+    record_state = (
+        record.get("State") or record.get("state") or state
+    )
+    market_name = _lower(
+        record.get("Market") or record.get("market")
+    )
+    commodity_name = _lower(
+        record.get("Commodity") or record.get("cmdt_name")
+    )
     return dict(
         source_system              = "agmarknet",
         state                      = _lower(record_state),
-        date                       = _parse_date(record.get("reported_date")),
+        date                       = _parse_date(
+            record.get("Arrival_Date") or record.get("reported_date")
+        ),
         market_name                = market_name,
         market_id                  = get_market_id(market_name, record_state),
-        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("cmdt_name"))),
+        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(commodity_name),
         commodity_group            = _lower(record.get("cmdt_grp_name")),
-        commodity_name             = _lower(record.get("cmdt_name")),
-        variety                    = None,
-        grade                      = None,
+        commodity_name             = commodity_name,
+        variety                    = _lower(
+            record.get("Variety") or record.get("variety")
+        ),
+        grade                      = _lower(
+            record.get("Grade") or record.get("grade")
+        ),
         arrival_quantity           = _to_float(record.get("as_on_arrival")),
-        min_price                  = None,
-        max_price                  = None,
-        modal_price                = _to_float(record.get("as_on_price")),
+        min_price                  = _to_float(
+            record.get("Min_Price") or record.get("min_price")
+        ),
+        max_price                  = _to_float(
+            record.get("Max_Price") or record.get("max_price")
+        ),
+        modal_price                = _to_float(
+            record.get("Modal_Price") or record.get("as_on_price") or record.get("modal_price")
+        ),
         source_url                 = sources["agmarknet"]["url"],
         method                     = sources["agmarknet"]["method"],
         source_name                = sources["agmarknet"]["source_name"],

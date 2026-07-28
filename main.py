@@ -49,7 +49,6 @@ from datetime import datetime
 from pathlib import Path
 
 # ── Agmarknet pipeline ────────────────────────────────────────────────────────
-from markets.agmarknet.filter_agmarknet import fetch_agmarknet_filters, save_filters
 from markets.agmarknet.run import agmarknet
 
 # ── Other-state scrapers ──────────────────────────────────────────────────────
@@ -74,55 +73,36 @@ logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 1 — Agmarknet filter refresh
+# STEP 2 is now the first active pipeline step; Step 1 (filter refresh) has
+# been removed because the new data.gov.in API does not require a local
+# market-list file.
 # ─────────────────────────────────────────────────────────────────────────────
-
-def step1_refresh_agmarknet_filters() -> None:
-    """
-    Fetch fresh filter metadata from the Agmarknet API and save it to
-    ``agmarknet_filters.json``.
-
-    This file is read by Step 2 (agmarknet scraper) as the market list,
-    so it must be refreshed BEFORE the agmarknet scrape runs.
-
-    No data is returned — this step only writes a file.
-    """
-    logger.info("=" * 60)
-    logger.info("STEP 1 — Refreshing Agmarknet filter metadata …")
-    logger.info("=" * 60)
-    try:
-        filters = fetch_agmarknet_filters()
-        save_filters(filters)           # saves to agmarknet_filters.json
-        logger.info("STEP 1 ✓ — Filter metadata saved successfully.")
-    except Exception as exc:
-        # Non-fatal: if the file already exists from a previous run the
-        # agmarknet scraper will use the old version and still work.
-        logger.warning(
-            "STEP 1 ⚠ — Could not refresh filters (using existing file if present): %s",
-            exc,
-        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 2 — Agmarknet scrape
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def step2_scrape_agmarknet() -> list[dict]:
+async def step2_scrape_agmarknet(date_str: str = "") -> list[dict]:
     """
-    Scrape marketwise price-arrival records for every market in
-    ``agmarknet_filters.json`` concurrently.
+    Fetch all price-arrival records from data.gov.in for today (or date_str)
+    via a single curl request. The underlying ``agmarknet()`` call is
+    synchronous (uses subprocess curl) and is run in a thread executor so it
+    does not block the event loop when used with asyncio.gather.
 
     Returns
     -------
     list[dict]
-        Raw agmarknet records (each dict has fields like ``cmdt_name``,
-        ``reported_date``, ``market``, ``state``, etc.)
+        Raw agmarknet records. Each dict has keys:
+        Arrival_Date, Commodity, Commodity_Code, District, Grade,
+        Market, Max_Price, Min_Price, Modal_Price, State, Variety.
     """
     logger.info("=" * 60)
     logger.info("STEP 2 — Scraping Agmarknet …")
     logger.info("=" * 60)
     try:
-        records = await agmarknet()
+        loop = asyncio.get_event_loop()
+        records = await loop.run_in_executor(None, agmarknet, date_str or None)
         logger.info("STEP 2 ✓ — Agmarknet returned %d records.", len(records))
         return records
     except Exception as exc:
@@ -283,8 +263,8 @@ def step6_upload(merged: dict) -> None:
 async def run_pipeline(date_str: str = "", skip_agmarknet: bool = False) -> None:
     """
     Execute the full end-to-end pipeline:
-    1. Refresh Agmarknet filters (skipped if skip_agmarknet is True)
-    2. Scrape Agmarknet (async) (skipped if skip_agmarknet is True)
+    1. (Removed) Agmarknet filter refresh — no longer needed with data.gov.in API
+    2. Scrape Agmarknet via data.gov.in curl (skipped if skip_agmarknet is True)
     3. Scrape other state markets (async)
     4. Merge all data
     5. Save to final_data.json
@@ -296,17 +276,14 @@ async def run_pipeline(date_str: str = "", skip_agmarknet: bool = False) -> None
     logger.info("━" * 60)
 
     if skip_agmarknet:
-        logger.info("Skipping Agmarknet filter refresh and scrape (skip_agmarknet=True) …")
+        logger.info("Skipping Agmarknet scrape (skip_agmarknet=True) …")
         agmarknet_records = []
         other_markets = await step3_scrape_other_markets(date_str=date_str)
     else:
-        # Step 1 — sync; run before anything async
-        step1_refresh_agmarknet_filters()
-
-        # Steps 2 & 3 run CONCURRENTLY (both are async)
+        # Steps 2 & 3 run CONCURRENTLY
         logger.info("Running Agmarknet and other-state scrapers in parallel …")
         agmarknet_records, other_markets = await asyncio.gather(
-            step2_scrape_agmarknet(),
+            step2_scrape_agmarknet(date_str=date_str),
             step3_scrape_other_markets(date_str=date_str),
             return_exceptions=False,   # let exceptions propagate to top-level handler
         )
