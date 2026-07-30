@@ -25,6 +25,7 @@ Each record from the API looks like:
 import json
 import logging
 import os
+import subprocess
 import time
 from datetime import date as date_type
 from typing import Any
@@ -59,16 +60,19 @@ PAGE_SIZE = int(os.getenv("AGMARKNET_PAGE_SIZE", "10000"))
 # ---------------------------------------------------------------------------
 
 def _fetch_via_curl(url: str) -> dict[str, Any]:
-    """Make a GET request with a 30s timeout and return parsed JSON response."""
-    import requests as _requests
-
-    resp = _requests.get(
+    """Run a curl GET request with a 30s timeout and return parsed JSON response."""
+    cmd = [
+        "curl",
+        "-s",
+        "--max-time", "30",
+        "-X", "GET",
         url,
-        headers={"Accept": "application/json"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
+        "-H", "accept: application/json",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    if not result.stdout.strip():
+        raise ValueError("curl returned empty stdout response")
+    return json.loads(result.stdout)
 
 
 def _to_dd_mm_yyyy(date_str: str | None) -> str:
