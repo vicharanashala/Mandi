@@ -43,11 +43,11 @@ Record schema (new API – lowercase field names)
 import json
 import logging
 import os
-import subprocess
 import time
 from datetime import date as date_type
 from typing import Any
 
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -129,20 +129,31 @@ KNOWN_STATES: list[str] = [
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fetch_via_curl(url: str) -> dict[str, Any]:
-    """Run a curl GET request with a 30 s timeout and return parsed JSON."""
-    cmd = [
-        "curl",
-        "-s",
-        "--max-time", "30",
-        "-X", "GET",
+def _fetch(url: str) -> dict[str, Any]:
+    """
+    Perform a GET request and return parsed JSON.
+
+    Uses the `requests` library (already in requirements.txt) instead of
+    subprocess curl so that DNS resolution and connection errors surface as
+    Python exceptions — not opaque curl exit codes — and so the code works
+    in any environment without a system curl installation.
+
+    Timeouts
+    --------
+    connect_timeout : 15 s  — fail fast if DNS or TCP handshake hangs
+    read_timeout    : 60 s  — allow slow responses on large payloads
+    """
+    resp = requests.get(
         url,
-        "-H", "accept: application/json",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    if not result.stdout.strip():
-        raise ValueError("curl returned an empty response body")
-    data = json.loads(result.stdout)
+        headers={"Accept": "application/json"},
+        timeout=(15, 60),   # (connect_timeout, read_timeout)
+    )
+    resp.raise_for_status()
+
+    if not resp.text.strip():
+        raise ValueError("API returned an empty response body")
+
+    data: dict[str, Any] = resp.json()
 
     # Surface Elasticsearch window-exceeded errors embedded in the JSON message
     msg = data.get("message", "")
@@ -152,6 +163,10 @@ def _fetch_via_curl(url: str) -> dict[str, Any]:
             "Reduce PAGE_SIZE or add a state/commodity filter."
         )
     return data
+
+
+# Keep the old name as an alias so any external callers aren't broken.
+_fetch_via_curl = _fetch
 
 
 def _to_dd_mm_yyyy(date_str: str | None) -> str:
