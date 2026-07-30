@@ -80,6 +80,15 @@ PAGE_SIZE: int = min(int(os.getenv("AGMARKNET_PAGE_SIZE", "10000")), ES_MAX_WIND
 # Increase this if you observe silent empty responses after heavy traffic.
 STATE_DELAY_S: float = float(os.getenv("AGMARKNET_STATE_DELAY", "0.5"))
 
+# HTTP request timeouts (seconds).  GitHub Actions runners can be slow to
+# reach India's government API servers; increase these via env if needed.
+HTTP_CONNECT_TIMEOUT: float = float(os.getenv("AGMARKNET_CONNECT_TIMEOUT", "20"))
+HTTP_READ_TIMEOUT: float    = float(os.getenv("AGMARKNET_READ_TIMEOUT",    "120"))
+
+# Retry settings for _fetch() — applied to every individual HTTP call.
+HTTP_MAX_RETRIES: int         = int(os.getenv("AGMARKNET_HTTP_RETRIES",   "4"))
+HTTP_BACKOFF_BASE: float      = float(os.getenv("AGMARKNET_BACKOFF_BASE", "5"))  # seconds
+
 # Complete list of every Indian state / UT that can appear in this API.
 # We iterate all of them unconditionally so no state is ever silently missed,
 # even if it falls beyond the ES_MAX_WINDOW in an unfiltered sort order.
@@ -133,36 +142,63 @@ def _fetch(url: str) -> dict[str, Any]:
     """
     Perform a GET request and return parsed JSON.
 
-    Uses the `requests` library (already in requirements.txt) instead of
-    subprocess curl so that DNS resolution and connection errors surface as
-    Python exceptions — not opaque curl exit codes — and so the code works
-    in any environment without a system curl installation.
+    Retries up to HTTP_MAX_RETRIES times with exponential backoff on any
+    transient error (timeout, connection reset, 5xx).  This is important for
+    GitHub Actions runners whose network path to India's government API
+    servers can be significantly slower than a local machine.
 
-    Timeouts
-    --------
-    connect_timeout : 15 s  — fail fast if DNS or TCP handshake hangs
-    read_timeout    : 60 s  — allow slow responses on large payloads
+    Timeouts (configurable via env)
+    --------------------------------
+    AGMARKNET_CONNECT_TIMEOUT : default 20 s
+    AGMARKNET_READ_TIMEOUT    : default 120 s  (large Tamil Nadu batches need time)
     """
-    resp = requests.get(
-        url,
-        headers={"Accept": "application/json"},
-        timeout=(15, 60),   # (connect_timeout, read_timeout)
+    last_exc: Exception | None = None
+
+    for attempt in range(1, HTTP_MAX_RETRIES + 1):
+        try:
+            resp = requests.get(
+                url,
+                headers={"Accept": "application/json"},
+                timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT),
+            )
+            resp.raise_for_status()
+
+            if not resp.text.strip():
+                raise ValueError("API returned an empty response body")
+
+            data: dict[str, Any] = resp.json()
+
+            # Surface Elasticsearch window-exceeded errors in the JSON payload
+            msg = data.get("message", "")
+            if isinstance(msg, str) and "Result window is too large" in msg:
+                raise ValueError(
+                    f"Elasticsearch max_result_window exceeded (offset + limit > {ES_MAX_WINDOW}). "
+                    "Reduce PAGE_SIZE or add a state/commodity filter."
+                )
+            return data
+
+        except requests.exceptions.Timeout as exc:
+            last_exc = exc
+            wait = HTTP_BACKOFF_BASE * (2 ** (attempt - 1))  # 5, 10, 20, 40 s
+            logger.warning(
+                "HTTP timeout on attempt %d/%d — sleeping %.0f s before retry. URL: %s",
+                attempt, HTTP_MAX_RETRIES, wait, url[:120],
+            )
+            time.sleep(wait)
+
+        except requests.exceptions.RequestException as exc:
+            # Connection errors, DNS failures, 5xx, etc.
+            last_exc = exc
+            wait = HTTP_BACKOFF_BASE * (2 ** (attempt - 1))
+            logger.warning(
+                "HTTP error on attempt %d/%d (%s) — sleeping %.0f s before retry.",
+                attempt, HTTP_MAX_RETRIES, exc, wait,
+            )
+            time.sleep(wait)
+
+    raise RuntimeError(
+        f"All {HTTP_MAX_RETRIES} HTTP attempts failed. Last error: {last_exc}"
     )
-    resp.raise_for_status()
-
-    if not resp.text.strip():
-        raise ValueError("API returned an empty response body")
-
-    data: dict[str, Any] = resp.json()
-
-    # Surface Elasticsearch window-exceeded errors embedded in the JSON message
-    msg = data.get("message", "")
-    if isinstance(msg, str) and "Result window is too large" in msg:
-        raise ValueError(
-            f"Elasticsearch max_result_window exceeded (offset + limit > {ES_MAX_WINDOW}). "
-            "Reduce PAGE_SIZE or add a state/commodity filter."
-        )
-    return data
 
 
 # Keep the old name as an alias so any external callers aren't broken.
