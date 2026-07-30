@@ -140,7 +140,7 @@ async def fetch_karnataka_state_daily(
         # Attempt 3: commit + manual wait
         try:
             logger.debug(f"[Karnataka] Navigation attempt 3/3: commit + manual wait")
-            await page.goto(url, timeout=10000, wait_until="commit")
+            await page.goto(url, timeout=60_000, wait_until="commit")
             # Give page extra time to stabilize
             await page.wait_for_timeout(3000)
             logger.debug("[Karnataka] ✓ commit + manual wait succeeded")
@@ -181,7 +181,7 @@ async def fetch_karnataka_state_daily(
         
         # Attempt 3: commit + wait
         try:
-            async with page.expect_navigation(timeout=10000, wait_until="commit"):
+            async with page.expect_navigation(timeout=60_000, wait_until="commit"):
                 await action_coro()
             await page.wait_for_timeout(2000)
             logger.debug("[Karnataka] ✓ Navigation with commit succeeded")

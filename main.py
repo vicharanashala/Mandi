@@ -101,8 +101,7 @@ async def step2_scrape_agmarknet(date_str: str = "") -> list[dict]:
     logger.info("STEP 2 — Scraping Agmarknet …")
     logger.info("=" * 60)
     try:
-        loop = asyncio.get_event_loop()
-        records = await loop.run_in_executor(None, agmarknet, date_str or None)
+        records = await asyncio.to_thread(agmarknet, date_str or None)
         logger.info("STEP 2 ✓ — Agmarknet returned %d records.", len(records))
         return records
     except Exception as exc:
