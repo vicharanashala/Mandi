@@ -49,7 +49,7 @@ from datetime import datetime
 from pathlib import Path
 
 # ── Agmarknet pipeline ────────────────────────────────────────────────────────
-from markets.agmarknet.run import agmarknet
+from markets.agmarknet.run2 import agmarknet
 
 # ── Other-state scrapers ──────────────────────────────────────────────────────
 from markets.othermarkets.run import run_all_scrapers
