@@ -158,7 +158,10 @@ def _fetch(url: str) -> dict[str, Any]:
         try:
             resp = requests.get(
                 url,
-                headers={"Accept": "application/json"},
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "curl/8.5.0",
+                },
                 timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT),
             )
             resp.raise_for_status()
