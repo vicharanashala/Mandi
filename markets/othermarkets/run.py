@@ -1044,10 +1044,17 @@ def andhra_pradesh_mandi(
             return extracted_records
 
         except requests.RequestException as e:
-            logger.error(
-                f"[Andhra Pradesh] Network error (attempt {attempt}): {e}", exc_info=True
-            )
-            if attempt == _AP_RETRIES:
+            if attempt < _AP_RETRIES:
+                wait_time = 3 * attempt
+                logger.warning(
+                    f"[Andhra Pradesh] Network error on attempt {attempt}/{_AP_RETRIES}: {e}. Retrying in {wait_time}s..."
+                )
+                time.sleep(wait_time)
+            else:
+                logger.error(
+                    f"[Andhra Pradesh] Network error after {_AP_RETRIES} attempts: {e}",
+                    exc_info=True,
+                )
                 return []
         except json.JSONDecodeError as e:
             logger.error(
@@ -1055,11 +1062,17 @@ def andhra_pradesh_mandi(
             )
             return []
         except Exception as e:
-            logger.error(
-                f"[Andhra Pradesh] Unexpected error (attempt {attempt}): {e}",
-                exc_info=True,
-            )
-            if attempt == _AP_RETRIES:
+            if attempt < _AP_RETRIES:
+                wait_time = 3 * attempt
+                logger.warning(
+                    f"[Andhra Pradesh] Unexpected error on attempt {attempt}/{_AP_RETRIES}: {e}. Retrying in {wait_time}s..."
+                )
+                time.sleep(wait_time)
+            else:
+                logger.error(
+                    f"[Andhra Pradesh] Unexpected error after {_AP_RETRIES} attempts: {e}",
+                    exc_info=True,
+                )
                 return []
 
     return []
