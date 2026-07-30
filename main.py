@@ -101,7 +101,12 @@ async def step2_scrape_agmarknet(date_str: str = "") -> list[dict]:
     logger.info("STEP 2 — Scraping Agmarknet …")
     logger.info("=" * 60)
     try:
-        records = await asyncio.to_thread(agmarknet, date_str or None)
+        # agmarknet may be async (old httpx-based run.py) or sync (new
+        # curl-based run2.py).  Handle both transparently.
+        if asyncio.iscoroutinefunction(agmarknet):
+            records = await agmarknet(date_str or None)
+        else:
+            records = await asyncio.to_thread(agmarknet, date_str or None)
         logger.info("STEP 2 ✓ — Agmarknet returned %d records.", len(records))
         return records
     except Exception as exc:
