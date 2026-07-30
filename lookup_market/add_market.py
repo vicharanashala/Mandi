@@ -55,7 +55,7 @@ except ImportError:
 
 # ── paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR     = Path(__file__).parent
-XLSX_PATH    = BASE_DIR / "googleapi_geolocation_results_final.xlsx"
+XLSX_PATH    = BASE_DIR / "Final_geolocation_new.xlsx"
 JSON_PATH    = BASE_DIR / "markets_geo.json"   # optional preview output
 
 # ── MongoDB config — FILL IN BEFORE RUNNING ───────────────────────────────────
@@ -137,7 +137,8 @@ def read_xlsx(xlsx_path: Path) -> list[dict]:
         sys.exit(f"Excel file not found: {xlsx_path}")
 
     wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
-    ws = wb.active
+    ws = wb['location-missed']
+    # ws = wb.active
 
     rows       = ws.iter_rows(values_only=True)
     header_row = next(rows)
