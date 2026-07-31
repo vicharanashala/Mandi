@@ -266,7 +266,7 @@ def _fetch_for_state(
     if state_total == 0:
         return []
 
-    logger.info("  State %-30s  total=%d", f'"{state}"', state_total)
+    logger.debug("  State %-30s  total=%d", f'"{state}"', state_total)
 
     while True:
         remaining_window = ES_MAX_WINDOW - offset
@@ -382,7 +382,7 @@ def agmarknet(date: str | None = None) -> list[dict[str, Any]]:
         ) from exc
 
     total: int = int(count_resp.get("total", 0))
-    logger.info("Total records available for %s: %d", arrival_date, total)
+    logger.debug("Total Agmarknet records available for %s: %d", arrival_date, total)
 
     if total == 0:
         logger.warning("No records found for %s", arrival_date)
@@ -407,7 +407,7 @@ def agmarknet(date: str | None = None) -> list[dict[str, Any]]:
         return records
 
     # ── Step 3: total > 10 000 → per-state fetch using known state list ──────
-    logger.info(
+    logger.debug(
         "Total (%d) exceeds ES window (%d). Switching to per-state fetching.",
         total, ES_MAX_WINDOW,
     )
@@ -426,7 +426,7 @@ def agmarknet(date: str | None = None) -> list[dict[str, Any]]:
         try:
             state_records = _fetch_for_state(arrival_date, encoded_date, state)
             all_records.extend(state_records)
-            logger.info(
+            logger.debug(
                 "  State %-30s  fetched=%d  running_total=%d",
                 f'"{state}"', len(state_records), len(all_records),
             )
@@ -448,4 +448,3 @@ if __name__ == "__main__":
     data = agmarknet()
     print(json.dumps(data[:5], indent=2))
     print(f"\n Total records fetched: {len(data)}")
-

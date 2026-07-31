@@ -346,6 +346,8 @@ def normalise_all(raw_data: dict) -> list[dict]:
     """
     now = datetime.now(tz=timezone.utc)
     documents = []
+    skipped_by_state: dict[str, int] = {}
+    skipped_samples: list[str] = []
 
     for state_key, payload in raw_data.items():
         if not payload.get("success"):
@@ -366,7 +368,15 @@ def normalise_all(raw_data: dict) -> list[dict]:
                 doc["ingested_at"]  = now
                 documents.append(doc)
             except Exception as exc:
-                print(f"[ERROR] {state_key} record skipped — {exc}: {rec}")
+                skipped_by_state[state_key] = skipped_by_state.get(state_key, 0) + 1
+                if len(skipped_samples) < 5:
+                    skipped_samples.append(f"{state_key}: {exc}")
+
+    if skipped_by_state:
+        total_skipped = sum(skipped_by_state.values())
+        print(f"[WARN] Normalisation skipped {total_skipped} bad record(s): {skipped_by_state}")
+        for sample in skipped_samples:
+            print(f"       {sample}")
 
     print(f"[INFO] Normalised {len(documents)} documents across {len(raw_data)} states.")
     return documents

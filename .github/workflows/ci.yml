@@ -2,7 +2,7 @@ name: CI Pipeline
 
 on:
   schedule:
-    - cron: '0 */3 * * *'   # every 6 hours
+    - cron: '17 */3 * * *'   # every 3 hours
   workflow_dispatch:
   push:
     branches:
@@ -34,6 +34,14 @@ jobs:
             -e ALL_MANDI_COLLECTION="${{ secrets.ALL_MANDI_COLLECTION }}" \
             -e AGMARKNET_CONCURRENCY=1 \
             -e AGMARKNET_PAGE_DELAY=3.0 \
+            -e AGMARKNET_HTTP_RETRIES=6 \
+            -e AGMARKNET_BACKOFF_BASE=15 \
+            -e AGMARKNET_CONNECT_TIMEOUT=60 \
+            -e AGMARKNET_READ_TIMEOUT=180 \
+            -e AGMARKNET_STATE_DELAY=1.0 \
+            -e AP_MARKET_RETRIES=5 \
+            -e AP_MARKET_BACKOFF_BASE=15 \
+            -e AP_MARKET_TIMEOUT=120 \
             my-app python main.py
 
       - name: Run check_db.py in Docker
@@ -72,8 +80,14 @@ jobs:
             -e ALL_MANDI_COLLECTION="${{ secrets.ALL_MANDI_COLLECTION }}" \
             -e AGMARKNET_CONCURRENCY=2 \
             -e AGMARKNET_PAGE_DELAY=2.0 \
-            -e AGMARKNET_MAX_RETRIES=5 \
-            -e AGMARKNET_INITIAL_BACKOFF=15.0 \
+            -e AGMARKNET_HTTP_RETRIES=6 \
+            -e AGMARKNET_BACKOFF_BASE=15 \
+            -e AGMARKNET_CONNECT_TIMEOUT=60 \
+            -e AGMARKNET_READ_TIMEOUT=180 \
+            -e AGMARKNET_STATE_DELAY=1.0 \
+            -e AP_MARKET_RETRIES=5 \
+            -e AP_MARKET_BACKOFF_BASE=15 \
+            -e AP_MARKET_TIMEOUT=120 \
             my-app python main.py
 
       - name: Run check_db.py in Docker

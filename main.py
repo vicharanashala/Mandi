@@ -72,6 +72,42 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _record_count(data: object) -> int:
+    if isinstance(data, (list, tuple, dict, set)):
+        return len(data)
+    return 0
+
+
+def _summary_error(payload: dict) -> str:
+    error = str(payload.get("error") or "")
+    details = str(payload.get("details") or "")
+    if error and details and details != error:
+        message = f"{error}: {details}"
+    else:
+        message = error or details
+    return message[:220]
+
+
+def log_scraping_summary(merged: dict, elapsed: float) -> None:
+    logger.info("")
+    logger.info("SCRAPING STATUS SUMMARY")
+    logger.info("%-18s %-8s %10s  %s", "Source", "Status", "Records", "Error")
+    logger.info("%-18s %-8s %10s  %s", "-" * 18, "-" * 8, "-" * 10, "-" * 20)
+
+    for source, payload in merged.items():
+        if not isinstance(payload, dict):
+            logger.info("%-18s %-8s %10s  %s", source, "FAILED", 0, "invalid payload")
+            continue
+
+        success = bool(payload.get("success"))
+        data = payload.get("data") or []
+        error = _summary_error(payload)
+        status = "OK" if success else "FAILED"
+        logger.info("%-18s %-8s %10d  %s", source, status, _record_count(data), error)
+
+    logger.info("Pipeline finished in %.1f seconds.", elapsed)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 2 is now the first active pipeline step; Step 1 (filter refresh) has
 # been removed because the new data.gov.in API does not require a local
@@ -83,7 +119,7 @@ logger = logging.getLogger(__name__)
 # STEP 2 — Agmarknet scrape
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def step2_scrape_agmarknet(date_str: str = "") -> list[dict]:
+async def step2_scrape_agmarknet(date_str: str = "") -> dict:
     """
     Fetch all price-arrival records from data.gov.in for today (or date_str)
     via a single curl request. The underlying ``agmarknet()`` call is
@@ -92,14 +128,10 @@ async def step2_scrape_agmarknet(date_str: str = "") -> list[dict]:
 
     Returns
     -------
-    list[dict]
-        Raw agmarknet records. Each dict has keys:
-        Arrival_Date, Commodity, Commodity_Code, District, Grade,
-        Market, Max_Price, Min_Price, Modal_Price, State, Variety.
+    dict
+        ``{"success": bool, "data": list, "error": str|None}``.
     """
-    logger.info("=" * 60)
-    logger.info("STEP 2 — Scraping Agmarknet …")
-    logger.info("=" * 60)
+    logger.info("Starting Agmarknet scrape.")
     try:
         # agmarknet may be async (old httpx-based run.py) or sync (new
         # curl-based run2.py).  Handle both transparently.
@@ -107,11 +139,16 @@ async def step2_scrape_agmarknet(date_str: str = "") -> list[dict]:
             records = await agmarknet(date_str or None)
         else:
             records = await asyncio.to_thread(agmarknet, date_str or None)
-        logger.info("STEP 2 ✓ — Agmarknet returned %d records.", len(records))
-        return records
+        logger.info("Agmarknet scrape complete: %d records.", len(records))
+        return {"success": True, "data": records}
     except Exception as exc:
-        logger.error("STEP 2 ✗ — Agmarknet scrape failed: %s", exc, exc_info=True)
-        return []
+        logger.error("Agmarknet scrape failed: %s", exc)
+        return {
+            "success": False,
+            "error": "Agmarknet scrape failed",
+            "details": str(exc),
+            "data": [],
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,19 +171,13 @@ async def step3_scrape_other_markets(date_str: str = "") -> dict:
     dict
         ``{ "Karnataka": {"success": bool, "data": [...]}, … }``
     """
-    logger.info("=" * 60)
-    logger.info("STEP 3 — Scraping other state markets …")
-    logger.info("=" * 60)
+    logger.info("Starting other-market scrapers.")
     try:
         results = await run_all_scrapers(date_str=date_str)
-        for state, result in results.items():
-            status = "✓" if result.get("success") else "✗"
-            count  = len(result.get("data") or []) if result.get("success") else "–"
-            logger.info("  %s %s — %s records", status, state, count)
-        logger.info("STEP 3 ✓ — Other markets scrape complete.")
+        logger.info("Other-market scrapers complete.")
         return results
     except Exception as exc:
-        logger.error("STEP 3 ✗ — Other markets scrape failed: %s", exc, exc_info=True)
+        logger.error("Other-market scrape failed: %s", exc)
         return {}
 
 
@@ -155,7 +186,7 @@ async def step3_scrape_other_markets(date_str: str = "") -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def step4_merge(
-    agmarknet_records: list[dict],
+    agmarknet_result: list[dict] | dict,
     other_markets: dict,
 ) -> dict:
     """
@@ -175,8 +206,9 @@ def step4_merge(
 
     Parameters
     ----------
-    agmarknet_records : list[dict]
-        Raw records from Step 2 (empty list if step failed).
+    agmarknet_result : list[dict] | dict
+        Step 2 result. New shape is ``{"success": bool, "data": [...]}``;
+        lists are still accepted for backwards compatibility.
     other_markets : dict
         Per-state dicts from Step 3 (empty dict if step failed).
 
@@ -185,17 +217,16 @@ def step4_merge(
     dict
         Unified payload ready for normalisation and upload.
     """
-    logger.info("=" * 60)
-    logger.info("STEP 4 — Merging data sources …")
-    logger.info("=" * 60)
-
     merged: dict = {}
 
     # Agmarknet comes first (national feed)
-    merged["agmarknet"] = {
-        "success": bool(agmarknet_records),
-        "data":    agmarknet_records,
-    }
+    if isinstance(agmarknet_result, dict):
+        merged["agmarknet"] = agmarknet_result
+    else:
+        merged["agmarknet"] = {
+            "success": bool(agmarknet_result),
+            "data": agmarknet_result,
+        }
 
     # All other state scrapers
     merged.update(other_markets)
@@ -205,11 +236,7 @@ def step4_merge(
         for v in merged.values()
         if isinstance(v, dict)
     )
-    logger.info(
-        "STEP 4 ✓ — Merged %d sources, %d total records.",
-        len(merged),
-        total_records,
-    )
+    logger.info("Merged %d sources with %d total records.", len(merged), total_records)
     return merged
 
 
@@ -223,16 +250,13 @@ def step5_save_json(merged: dict, path: str = "final_data.json") -> None:
     This file can be inspected manually or re-fed into the database
     uploader without re-running the scrapers.
     """
-    logger.info("=" * 60)
-    logger.info("STEP 5 — Saving merged data to %s …", path)
-    logger.info("=" * 60)
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(merged, f, ensure_ascii=False, indent=4)
         size_mb = Path(path).stat().st_size / 1_048_576
-        logger.info("STEP 5 ✓ — Saved %.2f MB → %s", size_mb, path)
+        logger.info("Saved checkpoint %.2f MB -> %s.", size_mb, path)
     except Exception as exc:
-        logger.error("STEP 5 ✗ — Failed to save JSON: %s", exc, exc_info=True)
+        logger.error("Failed to save JSON: %s", exc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -248,16 +272,13 @@ def step6_upload(merged: dict) -> None:
       - ``database.normalise_all(merged)``  →  list[unified_doc]
       - ``database.upload_to_mongo(docs)``  →  bulk upsert
     """
-    logger.info("=" * 60)
-    logger.info("STEP 6 — Normalising & uploading to MongoDB …")
-    logger.info("=" * 60)
     try:
         docs = normalise_all(merged)
-        logger.info("Normalised %d documents — beginning upload …", len(docs))
+        logger.info("Normalised %d documents. Uploading to MongoDB.", len(docs))
         upload_to_mongo(docs)
-        logger.info("STEP 6 ✓ — Upload complete.")
+        logger.info("MongoDB upload complete.")
     except Exception as exc:
-        logger.error("STEP 6 ✗ — Upload failed: %s", exc, exc_info=True)
+        logger.error("Upload failed: %s", exc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -275,33 +296,39 @@ async def run_pipeline(date_str: str = "", skip_agmarknet: bool = False) -> None
     6. Normalise + upload to MongoDB
     """
     start = datetime.now()
-    logger.info("━" * 60)
-    logger.info("  APMC Mandi Scraper Pipeline — started %s", start.strftime("%Y-%m-%d %H:%M:%S"))
-    logger.info("━" * 60)
+    logger.info("APMC scraper started at %s.", start.strftime("%Y-%m-%d %H:%M:%S"))
 
     if skip_agmarknet:
         logger.info("Skipping Agmarknet scrape (skip_agmarknet=True) …")
-        agmarknet_records = []
+        agmarknet_result = {
+            "success": False,
+            "error": "Agmarknet skipped",
+            "data": [],
+        }
         other_markets = await step3_scrape_other_markets(date_str=date_str)
     else:
-        # Steps 2 & 3 run CONCURRENTLY
-        logger.info("Running Agmarknet and other-state scrapers in parallel …")
-        agmarknet_records, other_markets = await asyncio.gather(
+        logger.info("Running Agmarknet and other-state scrapers in parallel.")
+        agmarknet_result, other_markets = await asyncio.gather(
             step2_scrape_agmarknet(date_str=date_str),
             step3_scrape_other_markets(date_str=date_str),
             return_exceptions=False,   # let exceptions propagate to top-level handler
         )
 
     # If a step returned an exception object (shouldn't happen here), normalise
-    if isinstance(agmarknet_records, BaseException):
-        logger.error("Agmarknet step raised: %s", agmarknet_records)
-        agmarknet_records = []
+    if isinstance(agmarknet_result, BaseException):
+        logger.error("Agmarknet step raised: %s", agmarknet_result)
+        agmarknet_result = {
+            "success": False,
+            "error": "Agmarknet step raised",
+            "details": str(agmarknet_result),
+            "data": [],
+        }
     if isinstance(other_markets, BaseException):
         logger.error("Other-markets step raised: %s", other_markets)
         other_markets = {}
 
     # Step 4 — merge
-    merged = step4_merge(agmarknet_records, other_markets)
+    merged = step4_merge(agmarknet_result, other_markets)
 
     # Step 5 — save checkpoint JSON
     step5_save_json(merged)
@@ -310,9 +337,7 @@ async def run_pipeline(date_str: str = "", skip_agmarknet: bool = False) -> None
     step6_upload(merged)
 
     elapsed = (datetime.now() - start).total_seconds()
-    logger.info("━" * 60)
-    logger.info("  Pipeline finished in %.1f seconds.", elapsed)
-    logger.info("━" * 60)
+    log_scraping_summary(merged, elapsed)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -335,14 +360,13 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.warning("Pipeline interrupted by user (KeyboardInterrupt).")
     except Exception as exc:
-        logger.critical("Pipeline crashed: %s", exc, exc_info=True)
+        logger.critical("Pipeline crashed: %s", exc)
         sys.exit(1)
 
 
 if __name__ == "__main__":
     import time
     start = time.perf_counter()
-    # Your code here
     main()
     end = time.perf_counter()
-    print(f"Runtime: {end - start} seconds")
+    logger.debug("Runtime: %.2f seconds", end - start)

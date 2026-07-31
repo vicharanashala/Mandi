@@ -204,7 +204,7 @@ async def fetch_karnataka_state_daily(
         playwright_instance = None
         browser = None
         try:
-            logger.info(f"[Karnataka] Attempt {attempt}/{_KARNATAKA_MAX_RETRIES}")
+            logger.debug(f"[Karnataka] Attempt {attempt}/{_KARNATAKA_MAX_RETRIES}")
             playwright_instance = await async_playwright().start()
 
             # Launch headless Chromium with sandbox disabled (required in CI/Docker)
@@ -300,7 +300,7 @@ async def fetch_karnataka_state_daily(
             parsed_data = karnataka_mandi_parser(
                 html_content, filter=False, report_date=date_str
             )
-            logger.info(f"[Karnataka] ✓ SUCCESS: Parsed {len(parsed_data)} records for {date_str}")
+            logger.debug(f"[Karnataka] Parsed {len(parsed_data)} records for {date_str}")
             return parsed_data
 
         except Exception as e:
@@ -310,7 +310,7 @@ async def fetch_karnataka_state_daily(
             )
             if attempt < _KARNATAKA_MAX_RETRIES:
                 wait_time = 5 * attempt
-                logger.info(f"[Karnataka] Retrying in {wait_time}s...")
+                logger.debug(f"[Karnataka] Retrying in {wait_time}s...")
                 await asyncio.sleep(wait_time)  # back-off: 5 s, 10 s, 15 s
         finally:
             if browser:
@@ -325,8 +325,7 @@ async def fetch_karnataka_state_daily(
                     logger.warning(f"[Karnataka] Failed to stop Playwright: {stop_err}")
 
     logger.error(
-        f"[Karnataka] All {_KARNATAKA_MAX_RETRIES} attempts failed for date {date_str}: {type(last_exc).__name__}: {last_exc}",
-        exc_info=last_exc,
+        f"[Karnataka] All {_KARNATAKA_MAX_RETRIES} attempts failed for date {date_str}: {type(last_exc).__name__}: {last_exc}"
     )
     return {
         "success": False,
@@ -373,7 +372,7 @@ def maharashtra() -> list[dict]:
         for index, item in enumerate(mandi_code):
             try:
                 params = {"commodityCode": "null", "apmcCode": item["value"]}
-                logger.info(f"[Maharashtra] Fetching APMC {item['text']} (code {item['value']})")
+                logger.debug(f"[Maharashtra] Fetching APMC {item['text']} (code {item['value']})")
 
                 response = requests.get(url, params=params, headers=headers, timeout=30)
                 response.raise_for_status()
@@ -385,21 +384,19 @@ def maharashtra() -> list[dict]:
             except requests.RequestException as e:
                 logger.error(
                     f"[Maharashtra] Network error for {item['text']} "
-                    f"(code {item['value']}): {e}",
-                    exc_info=True,
+                    f"(code {item['value']}): {e}"
                 )
             except Exception as e:
                 logger.error(
                     f"[Maharashtra] Unexpected error for {item['text']} "
-                    f"(code {item['value']}): {e}",
-                    exc_info=True,
+                    f"(code {item['value']}): {e}"
                 )
 
     except Exception as e:
-        logger.error(f"[Maharashtra] Critical failure: {e}", exc_info=True)
+        logger.error(f"[Maharashtra] Critical failure: {e}")
         return []
 
-    logger.info(f"[Maharashtra] Total records collected: {len(all_data)}")
+    logger.debug(f"[Maharashtra] Total records collected: {len(all_data)}")
     return all_data
 
 
@@ -544,13 +541,13 @@ def meghalaya_scrape_daily_report(report_date: str | None = None) -> list[dict]:
     session = requests.Session()
     session.headers.update(_MEGHALAYA_HEADERS)
 
-    logger.info(f"[Meghalaya] Fetching page 1 → {url}")
+    logger.debug(f"[Meghalaya] Fetching page 1 -> {url}")
     resp = session.get(url, timeout=30, verify=False)
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "lxml")
     all_records = _meghalaya_parse_page(soup, report_date)
-    logger.info(f"[Meghalaya] Page 1: {len(all_records)} records")
+    logger.debug(f"[Meghalaya] Page 1: {len(all_records)} records")
 
     page = 1
     while _meghalaya_has_next(soup):
@@ -560,16 +557,16 @@ def meghalaya_scrape_daily_report(report_date: str | None = None) -> list[dict]:
         payload["__EVENTTARGET"]   = _MEGHALAYA_TARGET_ID
         payload["__EVENTARGUMENT"] = "Page$Next"
 
-        logger.info(f"[Meghalaya] Fetching page {page} …")
+        logger.debug(f"[Meghalaya] Fetching page {page}")
         resp = session.post(url, data=payload, timeout=30, verify=False)
         resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "lxml")
         page_records = _meghalaya_parse_page(soup, report_date)
-        logger.info(f"[Meghalaya] Page {page}: {len(page_records)} records")
+        logger.debug(f"[Meghalaya] Page {page}: {len(page_records)} records")
         all_records.extend(page_records)
 
-    logger.info(
+    logger.debug(
         f"[Meghalaya] Done — {len(all_records)} total records for {report_date}"
     )
     return all_records
@@ -657,7 +654,7 @@ async def fetch_nagaland_state_daily() -> list[dict] | dict:
         playwright_instance = None
         browser = None
         try:
-            logger.info(f"[Nagaland] Attempt {attempt}/{_NAGALAND_MAX_RETRIES}")
+            logger.debug(f"[Nagaland] Attempt {attempt}/{_NAGALAND_MAX_RETRIES}")
             playwright_instance = await async_playwright().start()
 
             browser = await playwright_instance.chromium.launch(
@@ -694,7 +691,7 @@ async def fetch_nagaland_state_daily() -> list[dict] | dict:
 
             # Parse the price table inline (no external parser import needed)
             data = _nagaland_extract_apmc_prices(html_content)
-            logger.info(f"[Nagaland] Parsed {len(data)} records")
+            logger.debug(f"[Nagaland] Parsed {len(data)} records")
             return data
 
         except Exception as e:
@@ -717,8 +714,7 @@ async def fetch_nagaland_state_daily() -> list[dict] | dict:
                     logger.warning(f"[Nagaland] Failed to stop Playwright: {stop_err}")
 
     logger.error(
-        f"[Nagaland] All {_NAGALAND_MAX_RETRIES} attempts failed: {last_exc}",
-        exc_info=last_exc,
+        f"[Nagaland] All {_NAGALAND_MAX_RETRIES} attempts failed: {last_exc}"
     )
     return {
         "success": False,
@@ -767,7 +763,7 @@ def punjab_mandi(start_date: str = None, end_date: str = None) -> list[dict]:
 
     for attempt in range(1, _PUNJAB_RETRIES + 1):
         try:
-            logger.info(
+            logger.debug(
                 f"[Punjab] Fetching {start_date}→{end_date} "
                 f"(attempt {attempt}/{_PUNJAB_RETRIES}, timeout={_PUNJAB_TIMEOUT}s)"
             )
@@ -776,7 +772,7 @@ def punjab_mandi(start_date: str = None, end_date: str = None) -> list[dict]:
             data = response.json()
 
             raw_records = data.get("responseData") or []
-            logger.info(
+            logger.debug(
                 f"[Punjab] Raw responseData length: {len(raw_records)}  "
                 f"| Top-level keys: {list(data.keys())}"
             )
@@ -797,7 +793,7 @@ def punjab_mandi(start_date: str = None, end_date: str = None) -> list[dict]:
                 for item in raw_records
             ]
 
-            logger.info(f"[Punjab] Fetched {len(response_data)} records")
+            logger.debug(f"[Punjab] Fetched {len(response_data)} records")
             return response_data
 
         except requests.Timeout as e:
@@ -809,14 +805,14 @@ def punjab_mandi(start_date: str = None, end_date: str = None) -> list[dict]:
                 logger.error("[Punjab] All retry attempts timed out — giving up.")
                 return []
         except requests.RequestException as e:
-            logger.error(f"[Punjab] Network error (attempt {attempt}): {e}", exc_info=True)
+            logger.error(f"[Punjab] Network error (attempt {attempt}): {e}")
             if attempt == _PUNJAB_RETRIES:
                 return []
         except json.JSONDecodeError as e:
-            logger.error(f"[Punjab] Failed to parse JSON response: {e}", exc_info=True)
+            logger.error(f"[Punjab] Failed to parse JSON response: {e}")
             return []
         except Exception as e:
-            logger.error(f"[Punjab] Unexpected error (attempt {attempt}): {e}", exc_info=True)
+            logger.error(f"[Punjab] Unexpected error (attempt {attempt}): {e}")
             if attempt == _PUNJAB_RETRIES:
                 return []
 
@@ -901,7 +897,7 @@ async def uttarpradesh_mandi() -> list[dict]:
     for r in results:
         all_data.extend(r)
 
-    logger.info(f"[UP] Total records collected: {len(all_data)}")
+    logger.debug(f"[UP] Total records collected: {len(all_data)}")
     return all_data
 
 
@@ -915,7 +911,7 @@ def andhra_pradesh_mandi(
     start_date: str | None = None,
     end_date: str | None = None,
     days_back: int = 30,
-) -> list[dict]:
+) -> list[dict] | dict[str, Any]:
     """
     Fetch Andhra Pradesh mandi price data from the agriculture.ap.gov.in API.
 
@@ -930,8 +926,9 @@ def andhra_pradesh_mandi(
 
     Returns
     -------
-    list[dict]
-        List of flattened commodity records across mandis in Andhra Pradesh.
+    list[dict] | dict[str, Any]
+        List of flattened commodity records across mandis in Andhra Pradesh,
+        or a failure dict when the upstream service cannot be reached.
     """
     url = "https://agriculture.ap.gov.in/staging/api/emarket/getMarketPriceData"
     headers = {
@@ -995,12 +992,21 @@ def andhra_pradesh_mandi(
         "stateUUID": "1b62503c-0355-4222-8712-80e1e1d29445",
     }
 
-    _AP_TIMEOUT = 60
-    _AP_RETRIES = 3
+    _AP_TIMEOUT = float(os.getenv("AP_MARKET_TIMEOUT", "60"))
+    _AP_RETRIES = max(1, int(os.getenv("AP_MARKET_RETRIES", "3")))
+    _AP_BACKOFF_BASE = float(os.getenv("AP_MARKET_BACKOFF_BASE", "3"))
+
+    def failure_result(error: str, details: str) -> dict[str, Any]:
+        return {
+            "success": False,
+            "error": error,
+            "details": details,
+            "data": [],
+        }
 
     for attempt in range(1, _AP_RETRIES + 1):
         try:
-            logger.info(
+            logger.debug(
                 f"[Andhra Pradesh] Fetching market price data (attempt {attempt}/{_AP_RETRIES})"
             )
             response = requests.post(
@@ -1038,42 +1044,49 @@ def andhra_pradesh_mandi(
                                             record["longitude"] = lon
                                         extracted_records.append(record)
 
-            logger.info(
+            logger.debug(
                 f"[Andhra Pradesh] Successfully extracted {len(extracted_records)} records"
             )
             return extracted_records
 
+        except (json.JSONDecodeError, requests.exceptions.JSONDecodeError) as e:
+            logger.error(
+                f"[Andhra Pradesh] Failed to parse JSON response: {e}"
+            )
+            return failure_result(
+                "Andhra Pradesh returned invalid JSON",
+                str(e),
+            )
         except requests.RequestException as e:
             if attempt < _AP_RETRIES:
-                wait_time = 3 * attempt
+                wait_time = _AP_BACKOFF_BASE * attempt
                 logger.warning(
                     f"[Andhra Pradesh] Network error on attempt {attempt}/{_AP_RETRIES}: {e}. Retrying in {wait_time}s..."
                 )
                 time.sleep(wait_time)
             else:
                 logger.error(
-                    f"[Andhra Pradesh] Network error after {_AP_RETRIES} attempts: {e}",
-                    exc_info=True,
+                    f"[Andhra Pradesh] Upstream unavailable after {_AP_RETRIES} attempts: {e}"
                 )
-                return []
-        except json.JSONDecodeError as e:
-            logger.error(
-                f"[Andhra Pradesh] Failed to parse JSON response: {e}", exc_info=True
-            )
-            return []
+                return failure_result(
+                    "Andhra Pradesh upstream unavailable",
+                    str(e),
+                )
         except Exception as e:
             if attempt < _AP_RETRIES:
-                wait_time = 3 * attempt
+                wait_time = _AP_BACKOFF_BASE * attempt
                 logger.warning(
                     f"[Andhra Pradesh] Unexpected error on attempt {attempt}/{_AP_RETRIES}: {e}. Retrying in {wait_time}s..."
                 )
                 time.sleep(wait_time)
             else:
                 logger.error(
-                    f"[Andhra Pradesh] Unexpected error after {_AP_RETRIES} attempts: {e}",
-                    exc_info=True,
+                    f"[Andhra Pradesh] Unexpected error after {_AP_RETRIES} attempts: {e}"
                 )
-                return []
+                return failure_result(
+                    "Andhra Pradesh scraper failed",
+                    str(e),
+                )
 
     return []
 
@@ -1101,9 +1114,7 @@ async def run_all_scrapers(date_str: str = "") -> dict[str, Any]:
     dict[str, Any]
         ``{ "StateName": { "success": bool, "data": list|dict } }``
     """
-    logger.info("═" * 60)
-    logger.info("  Starting all-market APMC mandi scraper run …")
-    logger.info("═" * 60)
+    logger.debug("Starting all-market APMC mandi scraper run.")
 
     # ── Schedule async (Playwright) scrapers with a hard timeout ────────────
     # Playwright browsers can hang indefinitely on slow/broken pages.
@@ -1145,7 +1156,7 @@ async def run_all_scrapers(date_str: str = "") -> dict[str, Any]:
 
     # ── Gather all results; return_exceptions=True so one failure doesn't
     #    cancel the rest ─────────────────────────────────────────────────────
-    logger.info("Waiting for all scrapers to complete …")
+    logger.debug("Waiting for all scrapers to complete.")
     gathered = await asyncio.gather(
         karnataka_task,
         nagaland_task,
@@ -1170,7 +1181,7 @@ async def run_all_scrapers(date_str: str = "") -> dict[str, Any]:
     results: dict[str, Any] = {}
     for state, result in zip(state_names, gathered):
         if isinstance(result, BaseException):
-            logger.error(f"Scraper for {state} failed: {result}", exc_info=result)
+            logger.error(f"Scraper for {state} failed: {result}")
             results[state] = {
                 "success": False,
                 "error": str(result),
@@ -1190,12 +1201,10 @@ async def run_all_scrapers(date_str: str = "") -> dict[str, Any]:
                 "data": result.get("data", []),
             }
         else:
-            logger.info(f"✓ {state} — completed successfully")
+            logger.debug(f"{state} completed successfully")
             results[state] = {"success": True, "data": result}
 
-    logger.info("═" * 60)
-    logger.info("  All scrapers finished.")
-    logger.info("═" * 60)
+    logger.debug("All other-market scrapers finished.")
     return results
 
 
@@ -1229,7 +1238,7 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.warning("Scraping interrupted by user (KeyboardInterrupt).")
     except Exception as e:
-        logger.critical(f"Critical error in main execution: {e}", exc_info=True)
+        logger.critical(f"Critical error in main execution: {e}")
 
 
 if __name__ == "__main__":
