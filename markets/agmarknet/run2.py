@@ -43,6 +43,7 @@ Record schema (new API – lowercase field names)
 import json
 import logging
 import os
+import random
 import time
 from datetime import date as date_type
 from typing import Any
@@ -80,14 +81,16 @@ PAGE_SIZE: int = min(int(os.getenv("AGMARKNET_PAGE_SIZE", "10000")), ES_MAX_WIND
 # Increase this if you observe silent empty responses after heavy traffic.
 STATE_DELAY_S: float = float(os.getenv("AGMARKNET_STATE_DELAY", "0.5"))
 
-# HTTP request timeouts (seconds).  GitHub Actions runners can be slow to
-# reach India's government API servers; increase these via env if needed.
-HTTP_CONNECT_TIMEOUT: float = float(os.getenv("AGMARKNET_CONNECT_TIMEOUT", "20"))
-HTTP_READ_TIMEOUT: float    = float(os.getenv("AGMARKNET_READ_TIMEOUT",    "120"))
+# HTTP request timeouts (seconds).  Cloud Run / GHA paths to data.gov.in are
+# flaky (RemoteDisconnected / connection aborted); keep these generous.
+HTTP_CONNECT_TIMEOUT: float = float(os.getenv("AGMARKNET_CONNECT_TIMEOUT", "30"))
+HTTP_READ_TIMEOUT: float    = float(os.getenv("AGMARKNET_READ_TIMEOUT",    "180"))
 
 # Retry settings for _fetch() — applied to every individual HTTP call.
-HTTP_MAX_RETRIES: int         = int(os.getenv("AGMARKNET_HTTP_RETRIES",   "4"))
-HTTP_BACKOFF_BASE: float      = float(os.getenv("AGMARKNET_BACKOFF_BASE", "5"))  # seconds
+# Defaults are tuned for Cloud Run where api.data.gov.in often closes
+# the socket before sending a response.
+HTTP_MAX_RETRIES: int         = int(os.getenv("AGMARKNET_HTTP_RETRIES",   "8"))
+HTTP_BACKOFF_BASE: float      = float(os.getenv("AGMARKNET_BACKOFF_BASE", "10"))  # seconds
 
 # Complete list of every Indian state / UT that can appear in this API.
 # We iterate all of them unconditionally so no state is ever silently missed,
@@ -138,29 +141,73 @@ KNOWN_STATES: list[str] = [
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _backoff_seconds(attempt: int, *, connection_drop: bool = False) -> float:
+    """
+    Exponential backoff with jitter.
+
+    Connection drops (RemoteDisconnected / Connection aborted) get a longer
+    base wait — data.gov.in often recovers only after tens of seconds when
+    hit from cloud egress IPs.
+    """
+    base = HTTP_BACKOFF_BASE * (2 if connection_drop else 1)
+    wait = base * (2 ** (attempt - 1))
+    # Cap so a single call cannot stall the whole cron for > ~3 minutes.
+    wait = min(wait, 120.0)
+    jitter = random.uniform(0, min(5.0, wait * 0.25))
+    return wait + jitter
+
+
+def _is_connection_drop(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(
+        token in text
+        for token in (
+            "remotedisconnected",
+            "connection aborted",
+            "connection reset",
+            "broken pipe",
+            "timed out",
+            "temporarily unavailable",
+        )
+    )
+
+
 def _fetch(url: str) -> dict[str, Any]:
     """
     Perform a GET request and return parsed JSON.
 
-    Retries up to HTTP_MAX_RETRIES times with exponential backoff on any
-    transient error (timeout, connection reset, 5xx).  This is important for
-    GitHub Actions runners whose network path to India's government API
-    servers can be significantly slower than a local machine.
+    Retries up to HTTP_MAX_RETRIES times with exponential backoff + jitter on
+    transient errors (timeout, RemoteDisconnected, connection reset, 5xx).
+    Each attempt uses a fresh Session with Connection: close so a half-closed
+    keep-alive socket cannot poison the next try — common on Cloud Run when
+    api.data.gov.in aborts mid-handshake.
 
     Timeouts (configurable via env)
     --------------------------------
-    AGMARKNET_CONNECT_TIMEOUT : default 20 s
-    AGMARKNET_READ_TIMEOUT    : default 120 s  (large Tamil Nadu batches need time)
+    AGMARKNET_CONNECT_TIMEOUT : default 30 s
+    AGMARKNET_READ_TIMEOUT    : default 180 s
+    AGMARKNET_HTTP_RETRIES    : default 8
+    AGMARKNET_BACKOFF_BASE    : default 10 s
     """
     last_exc: Exception | None = None
 
     for attempt in range(1, HTTP_MAX_RETRIES + 1):
+        session: requests.Session | None = None
         try:
-            resp = requests.get(
+            # Fresh TCP connection every attempt — avoids reuse of sockets that
+            # data.gov.in already closed without a response.
+            session = requests.Session()
+            resp = session.get(
                 url,
                 headers={
                     "Accept": "application/json",
-                    "User-Agent": "curl/8.5.0",
+                    "User-Agent": (
+                        "Mozilla/5.0 (X11; Linux x86_64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    "Connection": "close",
+                    "Accept-Encoding": "gzip, deflate",
                 },
                 timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT),
             )
@@ -174,30 +221,44 @@ def _fetch(url: str) -> dict[str, Any]:
             # Surface Elasticsearch window-exceeded errors in the JSON payload
             msg = data.get("message", "")
             if isinstance(msg, str) and "Result window is too large" in msg:
-                raise ValueError(
+                raise RuntimeError(
                     f"Elasticsearch max_result_window exceeded (offset + limit > {ES_MAX_WINDOW}). "
                     "Reduce PAGE_SIZE or add a state/commodity filter."
                 )
             return data
 
-        except requests.exceptions.Timeout as exc:
+        except RuntimeError:
+            # Non-retryable (ES window, HTTP 4xx already wrapped, etc.)
+            raise
+
+        except requests.exceptions.HTTPError as exc:
             last_exc = exc
-            wait = HTTP_BACKOFF_BASE * (2 ** (attempt - 1))  # 5, 10, 20, 40 s
+            status = exc.response.status_code if exc.response is not None else None
+            # Do not burn the full retry budget on permanent client errors.
+            if status is not None and 400 <= status < 500 and status != 429:
+                raise RuntimeError(
+                    f"Agmarknet HTTP {status} (non-retryable): {exc}"
+                ) from exc
+            wait = _backoff_seconds(attempt, connection_drop=status == 429)
             logger.warning(
-                "HTTP timeout on attempt %d/%d — sleeping %.0f s before retry. URL: %s",
-                attempt, HTTP_MAX_RETRIES, wait, url[:120],
+                "HTTP %s on attempt %d/%d — sleeping %.1f s before retry.",
+                status, attempt, HTTP_MAX_RETRIES, wait,
             )
             time.sleep(wait)
 
-        except requests.exceptions.RequestException as exc:
-            # Connection errors, DNS failures, 5xx, etc.
+        except (requests.exceptions.Timeout, requests.exceptions.RequestException, ValueError) as exc:
             last_exc = exc
-            wait = HTTP_BACKOFF_BASE * (2 ** (attempt - 1))
+            drop = _is_connection_drop(exc)
+            wait = _backoff_seconds(attempt, connection_drop=drop)
             logger.warning(
-                "HTTP error on attempt %d/%d (%s) — sleeping %.0f s before retry.",
+                "HTTP error on attempt %d/%d (%s) — sleeping %.1f s before retry.",
                 attempt, HTTP_MAX_RETRIES, exc, wait,
             )
             time.sleep(wait)
+
+        finally:
+            if session is not None:
+                session.close()
 
     raise RuntimeError(
         f"All {HTTP_MAX_RETRIES} HTTP attempts failed. Last error: {last_exc}"
