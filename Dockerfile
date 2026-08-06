@@ -15,7 +15,9 @@ RUN python -m playwright install --with-deps chromium
 # Copy all your project files
 COPY . .
 
-EXPOSE 8000        
+# EXPOSE 8000 intentionally removed — this is a Cloud Run Job, not a service.
 
-# Default command (can be overridden in workflow)
+# Default command for Cloud Run Job / Docker Hub deploy.
+# check_db.py is NOT run here — run it manually when needed.
+# Override CMD in Cloud Run Console only if you need different behavior.
 CMD ["python", "main.py"]
