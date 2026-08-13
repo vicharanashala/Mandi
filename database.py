@@ -41,18 +41,73 @@ ALL_MANDI_COLLECTION = os.getenv('ALL_MANDI_COLLECTION').strip()
 # HELPERS
 # ─────────────────────────────────────────────
 
+_ISO_YMD = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+_YMD_COMPACT = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _parse_date(raw: str) -> datetime | None:
-    """Parse any common date string → UTC-aware datetime (stored as BSON Date)."""
-    if not raw:
+    """Parse a date string → UTC-aware datetime (stored as BSON Date).
+
+    ISO ``YYYY-MM-DD`` / ``YYYYMMDD`` are parsed with strptime, not dateutil.
+    ``dateutil.parse(..., dayfirst=True)`` treats ``2026-07-09`` as
+    ``YYYY-DD-MM`` → 2026-09-07, which is what produced future AP dates.
+    Indian ``DD/MM/YYYY`` strings still go through dateutil with dayfirst.
+    """
+    if raw is None or raw == "":
         return None
+    if isinstance(raw, datetime):
+        return _as_utc(raw)
+
+    s = str(raw).strip()
+    iso = _ISO_YMD.match(s)
+    if iso:
+        try:
+            return datetime(
+                int(iso.group(1)), int(iso.group(2)), int(iso.group(3)),
+                tzinfo=timezone.utc,
+            )
+        except ValueError:
+            return None
+
+    compact = _YMD_COMPACT.match(s)
+    if compact:
+        try:
+            return datetime(
+                int(compact.group(1)), int(compact.group(2)), int(compact.group(3)),
+                tzinfo=timezone.utc,
+            )
+        except ValueError:
+            return None
+
     try:
-        dt = date_parser.parse(str(raw), dayfirst=True)
-        # If the parsed datetime is naive, treat it as UTC
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
+        dt = date_parser.parse(s, dayfirst=True, yearfirst=False)
+        return _as_utc(dt)
     except Exception:
         return None
+
+
+def _is_future_date(dt: datetime | None, *, today: datetime | None = None) -> bool:
+    if dt is None:
+        return False
+    today = today or datetime.now(timezone.utc)
+    return _as_utc(dt).date() > _as_utc(today).date()
+
+
+def _swap_dayfirst_iso_misparse(dt: datetime) -> datetime:
+    """Undo dateutil dayfirst on ISO dates: 2026-09-07 ↔ 2026-07-09.
+
+    Only dates with day <= 12 were ambiguous; day > 12 was already correct.
+    """
+    dt = _as_utc(dt)
+    if dt.day > 12:
+        return dt
+    return dt.replace(month=dt.day, day=dt.month)
 
 
 def _to_float(val) -> float | None:
@@ -364,6 +419,13 @@ def normalise_all(raw_data: dict) -> list[dict]:
         for rec in records:
             try:
                 doc = normaliser(rec, state=state_key)
+                if _is_future_date(doc.get("date"), today=now):
+                    skipped_by_state[state_key] = skipped_by_state.get(state_key, 0) + 1
+                    if len(skipped_samples) < 5:
+                        skipped_samples.append(
+                            f"{state_key}: future date {doc.get('date')!r}"
+                        )
+                    continue
                 doc["source_state"] = state_key
                 doc["ingested_at"]  = now
                 documents.append(doc)
@@ -833,10 +895,154 @@ def get_market_id(market_name: str, state: str | None = None) -> object | None:
 
 
 # ─────────────────────────────────────────────
+# REPAIR — Andhra Pradesh ISO dates swapped by dateutil dayfirst
+# ─────────────────────────────────────────────
+
+def repair_ap_iso_dayfirst_dates(*, dry_run: bool = True) -> dict:
+    """
+    Fix agriculture.ap.gov.in prices stored as YYYY-DD-MM.
+
+    Only touches rows with date > today.  dateutil.parse('2026-08-12',
+    dayfirst=True) → 2026-12-08; swap month/day back.  If the target
+    date already exists, delete the future duplicate instead of
+    flipping already-correct history.
+    """
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=8000)
+    db = client[DB_NAME]
+    master_coll = db[MASTER_COLLECTION]
+    price_coll = db[PRICE_COLLECTION]
+
+    today = datetime.now(timezone.utc)
+    ap_ids = [d["_id"] for d in master_coll.find(
+        {"source_system": "agriculture.ap.gov.in"},
+        {"_id": 1},
+    )]
+    future_q = {
+        "market_commodity_id": {"$in": ap_ids},
+        "date": {"$gt": today},
+    }
+    future_n = price_coll.count_documents(future_q) if ap_ids else 0
+    print(
+        f"[INFO] AP masters={len(ap_ids)} future_prices={future_n} "
+        f"dry_run={dry_run}"
+    )
+    if not ap_ids or future_n == 0:
+        print("[INFO] No future AP dates — skip repair (already fixed).")
+        client.close()
+        return {
+            "ap_masters": len(ap_ids),
+            "future_prices": future_n,
+            "would_move": 0,
+            "moved": 0,
+            "deleted_still_future": 0,
+            "dry_run": dry_run,
+        }
+
+    cursor = price_coll.find(
+        future_q,
+        {"_id": 1, "market_commodity_id": 1, "date": 1},
+    )
+    moves: list[tuple] = []
+    to_delete: list = []
+    for row in cursor:
+        old = row.get("date")
+        if old is None:
+            continue
+        new = _swap_dayfirst_iso_misparse(old)
+        if _is_future_date(new, today=today) or _as_utc(new).date() == _as_utc(old).date():
+            to_delete.append(row["_id"])
+            continue
+        exists = price_coll.find_one(
+            {
+                "market_commodity_id": row["market_commodity_id"],
+                "date": new,
+            },
+            {"_id": 1},
+        )
+        if exists:
+            to_delete.append(row["_id"])
+        else:
+            moves.append((row["_id"], row["market_commodity_id"], old, new))
+
+    print(
+        f"[INFO] {len(moves)} AP future price(s) to swap, "
+        f"{len(to_delete)} to delete."
+    )
+    moved = 0
+    deleted = 0
+    if not dry_run and (moves or to_delete):
+        park_ops = []
+        final_ops = []
+        for pid, mc_id, old, new in moves:
+            parked = _as_utc(old).replace(year=_as_utc(old).year + 100)
+            park_ops.append(UpdateOne({"_id": pid}, {"$set": {"date": parked}}))
+            final_ops.append(UpdateOne(
+                {"_id": pid},
+                {"$set": {"date": new, "market_commodity_id": mc_id}},
+            ))
+        if park_ops:
+            price_coll.bulk_write(park_ops, ordered=False)
+        if final_ops:
+            res = price_coll.bulk_write(final_ops, ordered=False)
+            moved = res.modified_count
+
+        leftover = list(price_coll.find(future_q, {"_id": 1}))
+        drop_ids = list(to_delete) + [x["_id"] for x in leftover]
+        if drop_ids:
+            deleted = price_coll.delete_many(
+                {"_id": {"$in": drop_ids}}
+            ).deleted_count
+            print(f"[INFO] Deleted {deleted} AP future duplicate(s).")
+
+    elif dry_run:
+        print("[DRY-RUN] No writes. Re-run with --execute to apply.")
+
+    client.close()
+    return {
+        "ap_masters": len(ap_ids),
+        "future_prices": future_n,
+        "would_move": len(moves),
+        "moved": moved,
+        "deleted_still_future": deleted,
+        "dry_run": dry_run,
+        "samples": [
+            {"old": o, "new": n}
+            for _, _, o, n in moves[:8]
+        ],
+    }
+
+
+# ─────────────────────────────────────────────
 # ENTRY POINT
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
-    with open("final_data.json", "r") as f:
-        RAW_DATA = json.load(f)
-    docs = normalise_all(RAW_DATA)
-    upload_to_mongo(docs)
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Normalise/upload mandi data, or repair AP ISO dates"
+    )
+    parser.add_argument(
+        "--repair-ap-dates",
+        action="store_true",
+        help="Fix agriculture.ap.gov.in dates swapped by dateutil dayfirst",
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="With --repair-ap-dates, actually write (default is dry-run)",
+    )
+    parser.add_argument(
+        "--input",
+        default="final_data.json",
+        help="JSON payload for a normal upload run",
+    )
+    args = parser.parse_args()
+
+    if args.repair_ap_dates:
+        report = repair_ap_iso_dayfirst_dates(dry_run=not args.execute)
+        print(json.dumps(report, indent=2, default=str))
+    else:
+        with open(args.input, "r") as f:
+            RAW_DATA = json.load(f)
+        docs = normalise_all(RAW_DATA)
+        upload_to_mongo(docs)
