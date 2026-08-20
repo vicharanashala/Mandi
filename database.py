@@ -229,21 +229,23 @@ def _norm_maharashtra(record: dict, state: str) -> dict:
 
 
 def _norm_uttar_pradesh(record: dict, state: str) -> dict:
+    market_name = _lower(record.get("Market") or record.get("market") or record.get("Mandi") or record.get("mandi"))
+    commodity_name = _lower(record.get("Commodity") or record.get("ProductName") or record.get("commodity"))
     return dict(
         source_system              = "up_krishi",
         state                      = state.lower(),
         date                       = _parse_date(record.get("Date")),
-        market_name                = None,
-        market_id                  = None,   # UP records carry no market name
-        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("ProductName"))),
-        commodity_group            = _lower(record.get("MainProductName")),
-        commodity_name             = _lower(record.get("ProductName")),
+        market_name                = market_name,
+        market_id                  = get_market_id(market_name, state) if market_name else None,
+        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(commodity_name),
+        commodity_group            = _lower(record.get("MainProductName") or record.get("Category")),
+        commodity_name             = commodity_name,
         variety                    = None,
         grade                      = None,
-        arrival_quantity           = _to_float(record.get("aavakRate")),
-        min_price                  = None,
-        max_price                  = None,
-        modal_price                = None,
+        arrival_quantity           = _to_float(record.get("arrival") or record.get("aavakRate")),
+        min_price                  = _to_float(record.get("min_price") or record.get("Wholesale_rate") or record.get("WholeSeleRate")),
+        max_price                  = _to_float(record.get("max_price")),
+        modal_price                = _to_float(record.get("modal_price") or record.get("Retail_price") or record.get("PhutKarRate") or record.get("Wholesale_rate") or record.get("WholeSeleRate")),
         source_url                 = sources["uttar_pradesh"]["url"],
         method                     = sources["uttar_pradesh"]["method"],
         source_name                = sources["uttar_pradesh"]["source_name"],
@@ -251,22 +253,23 @@ def _norm_uttar_pradesh(record: dict, state: str) -> dict:
 
 
 def _norm_punjab(record: dict, state: str) -> dict:
-    market_name = _lower(record.get("BranchName"))
+    market_name = _lower(record.get("BranchName") or record.get("Market") or record.get("market") or record.get("Mandi") or record.get("mandi"))
+    commodity_name = _lower(record.get("CommodityName") or record.get("Commodity") or record.get("commodity"))
     return dict(
         source_system              = "emandikaran",
         state                      = state.lower(),
-        date                       = _parse_date(record.get("EntryDate")),
+        date                       = _parse_date(record.get("EntryDate") or record.get("Date")),
         market_name                = market_name,
-        market_id                  = get_market_id(market_name, state),
-        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("CommodityName"))),
+        market_id                  = get_market_id(market_name, state) if market_name else None,
+        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(commodity_name),
         commodity_group            = None,
-        commodity_name             = _lower(record.get("CommodityName")),
+        commodity_name             = commodity_name,
         variety                    = None,
         grade                      = None,
-        arrival_quantity           = _to_float(record.get("Quantity")),
-        min_price                  = _to_float(record.get("Minprice")),
-        max_price                  = _to_float(record.get("MaxPrice")),
-        modal_price                = _to_float(record.get("ModalPrice")),
+        arrival_quantity           = _to_float(record.get("Quantity") or record.get("arrival")),
+        min_price                  = _to_float(record.get("Minprice") or record.get("min_price")),
+        max_price                  = _to_float(record.get("MaxPrice") or record.get("max_price")),
+        modal_price                = _to_float(record.get("ModalPrice") or record.get("modal_price")),
         source_url                 = sources["punjab"]["url"],
         method                     = sources["punjab"]["method"],
         source_name                = sources["punjab"]["source_name"],
@@ -827,14 +830,27 @@ def _get_market_lookup_collection(
     return _market_lookup_coll
 
 
+STATE_CANONICAL_MAP = {
+    "keralam": "kerala",
+    "chattisgarh": "chhattisgarh",
+    "nct of delhi": "delhi",
+    "pondicherry": "puducherry",
+    "orissa": "odisha",
+}
+
+
 def get_market_id(market_name: str, state: str | None = None) -> object | None:
     """
     Resolve a market name to its MongoDB _id from ALL_MANDI_COLLECTION.
 
     Lookup order:
-      1. Exact match on `name`  (case-insensitive, optionally filtered by state)
-      2. Exact match on `aliases` array element
-      3. Regex fallback on `aliases` (for partial / title-case mismatches)
+      1. Exact match on `name` (case-insensitive, state-filtered)
+      2. Exact match in `aliases` array (case-insensitive, state-filtered)
+      3. Suffix variations (only if exact match was not found):
+         - try stripped suffix (" apmc", " mandi", " market", " sub yard")
+         - try with " apmc" appended
+      4. Regex / partial match on `aliases`
+      5. Cross-state fallback (exact match across all states)
 
     Results are cached in-process to avoid repeated round trips.
     Returns the document's ObjectId, or None if not found.
@@ -843,8 +859,9 @@ def get_market_id(market_name: str, state: str | None = None) -> object | None:
         return None
 
     key = market_name.strip().lower()
-    state_lower = state.strip().lower() if isinstance(state, str) and state.strip() else None
-    cache_key = f"{state_lower}||{key}" if state_lower else key
+    state_raw = state.strip().lower() if isinstance(state, str) and state.strip() else None
+    state_canonical = STATE_CANONICAL_MAP.get(state_raw, state_raw) if state_raw else None
+    cache_key = f"{state_canonical}||{key}" if state_canonical else key
 
     if cache_key in _market_id_cache:
         return _market_id_cache[cache_key]
@@ -855,10 +872,10 @@ def get_market_id(market_name: str, state: str | None = None) -> object | None:
             _market_id_cache[cache_key] = None
             return None
 
-        state_filter = {"state": {"$regex": re.compile(re.escape(state_lower), re.IGNORECASE)}} \
-            if state_lower else {}
+        state_filter = {"state": {"$regex": re.compile(f"^{re.escape(state_canonical)}$", re.IGNORECASE)}} \
+            if state_canonical else {}
 
-        # 1. Exact match on `name`
+        # ── Step 1: Exact match on `name` ──────────────────────────────
         doc = coll.find_one(
             {"name": {"$regex": re.compile(f"^{re.escape(key)}$", re.IGNORECASE)},
              **state_filter},
@@ -868,7 +885,7 @@ def get_market_id(market_name: str, state: str | None = None) -> object | None:
             _market_id_cache[cache_key] = doc["_id"]
             return doc["_id"]
 
-        # 2. Exact element match on `aliases`
+        # ── Step 2: Exact element match in `aliases` array ────────────
         doc = coll.find_one(
             {"aliases": {"$regex": re.compile(f"^{re.escape(key)}$", re.IGNORECASE)},
              **state_filter},
@@ -878,18 +895,52 @@ def get_market_id(market_name: str, state: str | None = None) -> object | None:
             _market_id_cache[cache_key] = doc["_id"]
             return doc["_id"]
 
-        # 3. Regex / partial match on `aliases` (looser fallback)
-        pattern  = re.compile(re.escape(key), re.IGNORECASE)
+        # ── Step 3: Suffix Variations (Only if exact match not found) ──
+        # e.g., "kolar" vs "kolar apmc", "mysore mandi" vs "mysore"
+        suffix_patterns = []
+        if not key.endswith(" apmc"):
+            suffix_patterns.append(f"^{re.escape(key)}\\s+apmc$")
+        stripped = re.sub(r"\s*(apmc|mandi|market|sub yard|yard)\b", "", key).strip()
+        if stripped and stripped != key:
+            suffix_patterns.append(f"^{re.escape(stripped)}$")
+            suffix_patterns.append(f"^{re.escape(stripped)}\\s+apmc$")
+
+        for sp in suffix_patterns:
+            doc = coll.find_one(
+                {"$or": [
+                    {"name": {"$regex": re.compile(sp, re.IGNORECASE)}},
+                    {"aliases": {"$regex": re.compile(sp, re.IGNORECASE)}},
+                ], **state_filter},
+                projection={"_id": 1},
+            )
+            if doc:
+                _market_id_cache[cache_key] = doc["_id"]
+                return doc["_id"]
+
+        # ── Step 4: Regex fallback on `aliases` (partial match) ────────
+        pattern = re.compile(re.escape(key), re.IGNORECASE)
         fallback = coll.find_one(
             {"aliases": {"$regex": pattern}, **state_filter},
             projection={"_id": 1},
         )
-        result = fallback["_id"] if fallback else None
+        if fallback:
+            _market_id_cache[cache_key] = fallback["_id"]
+            return fallback["_id"]
+
+        # ── Step 5: Cross-state fallback (exact name/alias across DB) ──
+        cross_doc = coll.find_one(
+            {"$or": [
+                {"name": {"$regex": re.compile(f"^{re.escape(key)}$", re.IGNORECASE)}},
+                {"aliases": {"$regex": re.compile(f"^{re.escape(key)}$", re.IGNORECASE)}},
+            ]},
+            projection={"_id": 1},
+        )
+        result = cross_doc["_id"] if cross_doc else None
         _market_id_cache[cache_key] = result
         return result
 
     except Exception as exc:
-        print(f"[WARN] market_id lookup failed for '{key}' (state={state_lower}): {exc}")
+        print(f"[WARN] market_id lookup failed for '{key}' (state={state_canonical}): {exc}")
         _market_id_cache[cache_key] = None
         return None
 

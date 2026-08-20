@@ -81,4 +81,3 @@ def get_mandi_geo_doc(market_name: str, state: str) -> dict | None:
     }
 
     return doc
-print(get_mandi_geo_doc("Ahmedabad", "Gujarat"))
