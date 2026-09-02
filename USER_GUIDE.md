@@ -1,5 +1,6 @@
 # 🌾 National Mandi Intelligence System (Uni-Scrapper) — User Guide
 
+
 A clear, concise guide explaining what the **National Mandi Intelligence System** does, where it gets data, how it processes records, and how to run it.
 
 ---
