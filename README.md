@@ -263,7 +263,7 @@ The repository includes dedicated verification tools to audit database health:
 Runs a multi-point audit against live MongoDB instances:
 1. **Null Field Scanner**: Identifies missing `market_id`, `commodity_alias_lookup_id`, `date`, or `modal_price` records.
 2. **Future-Date Detector**: Flags and breaks down records with `date > UTC now`.
-3. **Price Logic Validator**: Verifies mathematical consistency: $\text{min\_price} \le \text{modal\_price} \le \text{max\_price}$.
+3. **Price Logic Validator**: Verifies mathematical consistency: $\text{Min Price} \le \text{Modal Price} \le \text{Max Price}$ (`min_price <= modal_price <= max_price`).
 4. **Orphaned Fact Audit**: Scans `price_records` referencing non-existent `markets_commodities` documents.
 
 ### `resolving.py`
