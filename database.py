@@ -513,10 +513,24 @@ def upload_to_mongo(
       3. Upsert into price_records (one price row per combo per date).
 
     Null fields are stripped before writing to save storage.
+
+    Returns:
+        dict: Upload statistics including upserted, matched, errors, skipped, and unresolved counts.
     """
+    stats = {
+        "master_upserted": 0,
+        "master_matched": 0,
+        "master_errors": 0,
+        "price_upserted": 0,
+        "price_matched": 0,
+        "price_errors": 0,
+        "skipped_degenerate": 0,
+        "unresolved_combos": 0,
+    }
+
     if not documents:
         print("[INFO] Nothing to upload.")
-        return
+        return stats
 
     client = MongoClient(uri, serverSelectionTimeoutMS=5000)
     client.admin.command("ping")
@@ -580,6 +594,7 @@ def upload_to_mongo(
         # Store filter_key + price_doc so we can look up _id after bulk write
         price_ops_meta.append((filter_key, price_doc))
 
+    stats["skipped_degenerate"] = skipped
     if skipped:
         print(f"[WARN] Skipped {skipped} degenerate record(s) with all-null key fields.")
 
@@ -587,10 +602,13 @@ def upload_to_mongo(
     if master_ops:
         try:
             result = master_coll.bulk_write(master_ops, ordered=False)
+            stats["master_upserted"] = result.upserted_count
+            stats["master_matched"]  = result.matched_count
             print(f"[OK] markets_commodities — upserted: {result.upserted_count}, "
                   f"matched: {result.matched_count}")
         except BulkWriteError as bwe:
             n_err = len(bwe.details.get("writeErrors", []))
+            stats["master_errors"] = n_err
             print(f"[WARN] markets_commodities bulk write had {n_err} error(s).")
             for err in bwe.details.get("writeErrors", [])[:5]:
                 print(f"       {err}")
@@ -670,6 +688,7 @@ def upload_to_mongo(
                 upsert=True,
             ))
 
+    stats["unresolved_combos"] = unresolved
     if unresolved:
         print(f"[WARN] {unresolved} combo(s) could not be resolved to a master _id — skipped.")
 
@@ -677,16 +696,20 @@ def upload_to_mongo(
     if price_ops:
         try:
             result = price_coll.bulk_write(price_ops, ordered=False)
+            stats["price_upserted"] = result.upserted_count
+            stats["price_matched"]  = result.matched_count
             print(f"[OK] price_records — upserted: {result.upserted_count}, "
                   f"matched (updated): {result.matched_count}")
         except BulkWriteError as bwe:
             n_err = len(bwe.details.get("writeErrors", []))
+            stats["price_errors"] = n_err
             print(f"[WARN] price_records bulk write had {n_err} error(s).")
             for err in bwe.details.get("writeErrors", [])[:5]:
                 print(f"       {err}")
 
     client.close()
     print("[INFO] Connection closed.")
+    return stats
 
 
 # ─────────────────────────────────────────────

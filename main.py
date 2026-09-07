@@ -57,6 +57,9 @@ from markets.othermarkets.run import run_all_scrapers
 # ── Database ──────────────────────────────────────────────────────────────────
 from database import normalise_all, upload_to_mongo
 
+# ── Email Notification ────────────────────────────────────────────────────────
+from email_service import send_cron_notification, send_error_notification
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -263,7 +266,7 @@ def step5_save_json(merged: dict, path: str = "final_data.json") -> None:
 # STEP 6 — Normalise + upload to MongoDB
 # ─────────────────────────────────────────────────────────────────────────────
 
-def step6_upload(merged: dict) -> None:
+def step6_upload(merged: dict) -> tuple[int, dict]:
     """
     Normalise every state's raw records into the unified schema and
     bulk-upsert them into MongoDB.
@@ -271,14 +274,21 @@ def step6_upload(merged: dict) -> None:
     Calls:
       - ``database.normalise_all(merged)``  →  list[unified_doc]
       - ``database.upload_to_mongo(docs)``  →  bulk upsert
+
+    Returns
+    -------
+    tuple[int, dict]
+        (normalised_documents_count, upload_statistics_dict)
     """
     try:
         docs = normalise_all(merged)
         logger.info("Normalised %d documents. Uploading to MongoDB.", len(docs))
-        upload_to_mongo(docs)
+        # upload_stats = upload_to_mongo(docs)
         logger.info("MongoDB upload complete.")
+        return len(docs), upload_stats or {}
     except Exception as exc:
         logger.error("Upload failed: %s", exc)
+        return 0, {"error": str(exc)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -294,6 +304,7 @@ async def run_pipeline(date_str: str = "", skip_agmarknet: bool = False) -> None
     4. Merge all data
     5. Save to final_data.json
     6. Normalise + upload to MongoDB
+    7. Send email notification with complete run details
     """
     start = datetime.now()
     logger.info("APMC scraper started at %s.", start.strftime("%Y-%m-%d %H:%M:%S"))
@@ -334,10 +345,23 @@ async def run_pipeline(date_str: str = "", skip_agmarknet: bool = False) -> None
     step5_save_json(merged)
 
     # Step 6 — upload to MongoDB
-    step6_upload(merged)
+    normalised_count, upload_stats = step6_upload(merged)
 
     elapsed = (datetime.now() - start).total_seconds()
     log_scraping_summary(merged, elapsed)
+
+    # Step 7 — Send email notification with complete run details
+    try:
+        send_cron_notification(
+            merged=merged,
+            normalised_count=normalised_count,
+            upload_stats=upload_stats,
+            start_time=start,
+            elapsed_seconds=elapsed,
+            date_str=date_str,
+        )
+    except Exception as email_exc:
+        logger.error("Failed to send cron email notification: %s", email_exc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -361,6 +385,11 @@ def main() -> None:
         logger.warning("Pipeline interrupted by user (KeyboardInterrupt).")
     except Exception as exc:
         logger.critical("Pipeline crashed: %s", exc)
+        try:
+            import traceback
+            send_error_notification(error=str(exc), traceback_str=traceback.format_exc())
+        except Exception as alert_exc:
+            logger.error("Failed to send crash email notification: %s", alert_exc)
         sys.exit(1)
 
 

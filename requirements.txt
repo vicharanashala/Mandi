@@ -143,5 +143,6 @@ uvicorn==0.46.0
 watchfiles==1.1.1
 wcwidth==0.7.0
 websockets==16.0
+yagmail==0.15.293
 yarl==1.23.0
 zipp==3.23.1

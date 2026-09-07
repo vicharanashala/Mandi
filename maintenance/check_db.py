@@ -11,11 +11,21 @@ Usage:
 
 import os
 import re
+import sys
+from pathlib import Path
 from pymongo import MongoClient, UpdateMany
 from pymongo.errors import DuplicateKeyError
 from dotenv import load_dotenv
 
-load_dotenv()
+# Ensure root directory and maintenance directory are on sys.path
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+_MAINT_DIR = Path(__file__).resolve().parent
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
+if str(_MAINT_DIR) not in sys.path:
+    sys.path.insert(0, str(_MAINT_DIR))
+
+load_dotenv(_ROOT_DIR / ".env")
 
 # Reuse the geo lookup from the lookup_market package
 from lookup_market.get_geo import get_mandi_geo_doc

@@ -16,10 +16,16 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Ensure root directory is on sys.path
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
+
+load_dotenv(_ROOT_DIR / ".env")
 
 from markets.agmarknet.run2 import agmarknet
 from database import (
