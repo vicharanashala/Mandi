@@ -51,7 +51,15 @@ jobs:
           MASTER_COLLECTION: listings
           PRICE_COLLECTION: price_records
           ALL_MANDI_COLLECTION: available_mandi
-        run: python -m pytest -q tests
+        run: |
+          set -o pipefail
+          python -m pytest -q -rfE --tb=short tests 2>&1 | tee pytest.log
+      - name: Show failing tests on the run page
+        if: failure()
+        run: |
+          grep -E "^(FAILED|ERROR|E  )" pytest.log | head -30 | while IFS= read -r line; do
+            echo "::error title=pytest::${line}"
+          done
 
   build-and-push:
     name: Build & Push
