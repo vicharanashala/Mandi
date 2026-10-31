@@ -153,29 +153,29 @@ def main() -> None:
         copy_indexes(src.available_mandi, dst[mandi_coll_name])
     mandi_coll = dst[mandi_coll_name]
     src.price_records.aggregate(
-        [{"$unset": ["commodity_alias_lookup_id", "market_id"]}, {"$out": {"db": args.target, "coll": C["price_records"]}}],
+        [{"$unset": ["commodity_alias_lookup_id", "market_id"]}, {"$out": {"db": args.target, "coll": C['price_records']}}],
         allowDiskUse=True,
     )
-    copy_indexes(src.price_records, dst[C["price_records"]], skip_keys={"commodity_alias_lookup_id", "market_id"})
+    copy_indexes(src.price_records, dst[C['price_records']], skip_keys={"commodity_alias_lookup_id", "market_id"})
     src.markets_commodities.aggregate(
         [
             {"$set": {"legacy": {"commodity_alias_lookup_id": "$commodity_alias_lookup_id", "market_id": "$market_id"},
                       "state_code": None, "product_id": None, "mandi_id": None}},
             {"$unset": ["commodity_alias_lookup_id", "market_id"]},
-            {"$out": {"db": args.target, "coll": C["listings"]}},
+            {"$out": {"db": args.target, "coll": C['listings']}},
         ],
         allowDiskUse=True,
     )
-    copy_indexes(src.markets_commodities, dst[C["listings"]], skip_keys={"commodity_alias_lookup_id", "market_id"})
-    dst[C["listings"]].create_index([("product_id", ASCENDING), ("mandi_id", ASCENDING)], name="idx_listing_product_mandi")
-    dst[C["listings"]].create_index([("mandi_id", ASCENDING)], name="idx_listing_mandi")
-    dst[C["listings"]].create_index([("state_code", ASCENDING)], name="idx_listing_state_code")
-    print(f"      listings {dst[C["listings"]].estimated_document_count()}, prices {dst[C["price_records"]].estimated_document_count()}, "
+    copy_indexes(src.markets_commodities, dst[C['listings']], skip_keys={"commodity_alias_lookup_id", "market_id"})
+    dst[C['listings']].create_index([("product_id", ASCENDING), ("mandi_id", ASCENDING)], name="idx_listing_product_mandi")
+    dst[C['listings']].create_index([("mandi_id", ASCENDING)], name="idx_listing_mandi")
+    dst[C['listings']].create_index([("state_code", ASCENDING)], name="idx_listing_state_code")
+    print(f"      listings {dst[C['listings']].estimated_document_count()}, prices {dst[C['price_records']].estimated_document_count()}, "
           f"mandis {mandi_coll.estimated_document_count()}")
 
     # ── 2. States ────────────────────────────────────────────────────────
     print("[2/7] Building states …")
-    seen = {norm(s) for s in dst[C["listings"]].distinct("state") + mandi_coll.distinct("state") if s}
+    seen = {norm(s) for s in dst[C['listings']].distinct("state") + mandi_coll.distinct("state") if s}
     states: dict[str, dict] = {}
     for group in STATE_SPELLINGS:
         states[slug(group[0])] = {"_id": slug(group[0]), "name": group[0], "spellings": sorted(set(group)), "lgd_code": None}
@@ -183,8 +183,8 @@ def main() -> None:
         if not any(spelling in s["spellings"] for s in states.values()):
             states.setdefault(slug(spelling), {"_id": slug(spelling), "name": spelling, "spellings": [], "lgd_code": None})
             states[slug(spelling)]["spellings"] = sorted(set(states[slug(spelling)]["spellings"]) | {spelling})
-    dst[C["states"]].insert_many(list(states.values()))
-    dst[C["states"]].create_index([("spellings", ASCENDING)], name="spellings")
+    dst[C['states']].insert_many(list(states.values()))
+    dst[C['states']].create_index([("spellings", ASCENDING)], name="spellings")
     code_of = {sp: s["_id"] for s in states.values() for sp in s["spellings"]}
     print(f"      {len(states)} states from {len(seen)} spellings")
 
@@ -201,18 +201,18 @@ def main() -> None:
                 "crop_master_id": next((g.get("crop_master_id") for g in gs if g.get("crop_master_id")), None),
                 "default_product_id": None, "active": any(g.get("active") is not False for g in gs),
                 "legacy_group_ids": [g["_id"] for g in gs], "created_at": now, "updated_at": now}
-        crop_id = dst[C["crops"]].insert_one(crop).inserted_id
+        crop_id = dst[C['crops']].insert_one(crop).inserted_id
         product = {"crop_id": crop_id, "name": name, "form": "raw", "price_unit": "Rs/quintal", "active": crop["active"],
                    "legacy_group_ids": crop["legacy_group_ids"], "created_at": now, "updated_at": now}
-        product_id = dst[C["products"]].insert_one(product).inserted_id
-        dst[C["crops"]].update_one({"_id": crop_id}, {"$set": {"default_product_id": product_id}})
+        product_id = dst[C['products']].insert_one(product).inserted_id
+        dst[C['crops']].update_one({"_id": crop_id}, {"$set": {"default_product_id": product_id}})
         aliases = sorted({norm(a) for g in gs for a in (g.get("aliases") or []) if norm(a)})
         crop_info[product_id] = (name, aliases)
         for g in gs:
             product_of_group[g["_id"]] = product_id
-    dst[C["crops"]].create_index([("name", ASCENDING)], unique=True, name="unique_crop_name")
-    dst[C["products"]].create_index([("crop_id", ASCENDING), ("name", ASCENDING)], unique=True, name="unique_product_name")
-    print(f"      {dst[C["crops"]].count_documents({})} crops, {dst[C["products"]].count_documents({})} products from {len(groups)} groups")
+    dst[C['crops']].create_index([("name", ASCENDING)], unique=True, name="unique_crop_name")
+    dst[C['products']].create_index([("crop_id", ASCENDING), ("name", ASCENDING)], unique=True, name="unique_product_name")
+    print(f"      {dst[C['crops']].count_documents({})} crops, {dst[C['products']].count_documents({})} products from {len(groups)} groups")
 
     # ── 4. Crop name links ───────────────────────────────────────────────
     print("[4/7] Building crop_names …")
@@ -259,7 +259,7 @@ def main() -> None:
         approved_crop["approved" if ok else "pending"] += 1
     ensure_catalog_indexes(dst)
     if crop_docs:
-        dst[C["crop_names"]].insert_many(crop_docs)
+        dst[C['crop_names']].insert_many(crop_docs)
     print(f"      {len(crop_docs)} crop names: {approved_crop['approved']} approved by migration, {approved_crop['pending']} pending")
 
     # ── 5. Mandi name links ──────────────────────────────────────────────
@@ -304,34 +304,34 @@ def main() -> None:
         })
         approved_mandi["approved" if ok else "pending"] += 1
     if mandi_docs:
-        dst[C["mandi_names"]].insert_many(mandi_docs)
+        dst[C['mandi_names']].insert_many(mandi_docs)
     print(f"      {len(mandi_docs)} mandi names: {approved_mandi['approved']} approved by migration, {approved_mandi['pending']} pending")
 
     # ── 6. Fill listings from the links ──────────────────────────────────
     print("[6/7] Filling listings.state_code / product_id / mandi_id …")
-    ops = [UpdateMany({"state": raw}, {"$set": {"state_code": code_of.get(norm(raw))}}) for raw in dst[C["listings"]].distinct("state") if raw]
+    ops = [UpdateMany({"state": raw}, {"$set": {"state_code": code_of.get(norm(raw))}}) for raw in dst[C['listings']].distinct("state") if raw]
     for d in crop_docs:
         if d["status"] == "approved":
             for raw_source, raw_name in raw_crop[(d["source"], d["raw_name"])]:
                 ops.append(UpdateMany({"source_system": raw_source, "commodity_name": raw_name}, {"$set": {"product_id": d["product_id"]}}))
     if ops:
-        dst[C["listings"]].bulk_write(ops, ordered=False)
+        dst[C['listings']].bulk_write(ops, ordered=False)
     ops = [UpdateMany({"source_system": rs, "state": rst, "market_name": rn}, {"$set": {"mandi_id": d["mandi_id"]}})
            for d in mandi_docs if d["status"] == "approved"
            for rs, rst, rn in raw_mandi[(d["source"], d["state_code"] or "", d["raw_name"])]]
     if ops:
-        dst[C["listings"]].bulk_write(ops, ordered=False)
+        dst[C['listings']].bulk_write(ops, ordered=False)
 
     # ── 7. Operational collections ───────────────────────────────────────
     print("[7/7] Creating ingestion_runs, review_items, audit_log …")
     review_log.ensure_indexes(dst)
-    dst[C["audit_log"]].create_index([("at", -1)], name="at_desc")
-    dst[C["migration_info"]].insert_one({"source": args.source, "at": now, "crop_names": dict(approved_crop), "mandi_names": dict(approved_mandi)})
+    dst[C['audit_log']].create_index([("at", -1)], name="at_desc")
+    dst[C['migration_info']].insert_one({"source": args.source, "at": now, "crop_names": dict(approved_crop), "mandi_names": dict(approved_mandi)})
 
-    total = dst[C["listings"]].estimated_document_count()
+    total = dst[C['listings']].estimated_document_count()
     print("\n[DONE]")
-    print(f"  listings with a product : {dst[C["listings"]].count_documents({'product_id': {'$ne': None}})} / {total}")
-    print(f"  listings with a mandi   : {dst[C["listings"]].count_documents({'mandi_id': {'$ne': None}})} / {total}")
+    print(f"  listings with a product : {dst[C['listings']].count_documents({'product_id': {'$ne': None}})} / {total}")
+    print(f"  listings with a mandi   : {dst[C['listings']].count_documents({'mandi_id': {'$ne': None}})} / {total}")
     print(f"  v1 collections in {args.source!r} were only read.")
     client.close()
 
