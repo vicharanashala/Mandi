@@ -345,6 +345,16 @@ crops/products from the v1 groups, and creates one link per name. A link starts 
 `decided_by: migration`, `needs_check: true`) only when the v1 match was unambiguous and plausible;
 everything else starts pending with the v1 answer kept as a suggestion.
 
+### v2 next to v1 in the same database (`v2_` prefix)
+When a separate database is not available, v2 can live inside `Price` with every v2 collection prefixed:
+```bash
+python maintenance/migrate_v2.py --source Price --target Price --prefix v2_
+```
+`available_mandi` is then shared: v2 reads it in place and never changes it. The v1 collections
+(`markets_commodities`, `price_records`, `available_mandi`, `commodity_alias_lookup`) are only read, and
+`--replace` drops only `v2_` collections. Run the scraper with `MANDI_DB_NAME=Price V2_COLLECTION_PREFIX=v2_`;
+it refuses to start if it would write to a v1 collection.
+
 ### Running v2
 Push to `feat/catalog-v2` and the **v2 - Test, Build & Push image** workflow runs the tests and pushes
 `vicharanashala/mandi-scrapping:v2-<sha>` and `:v2-latest`. Run it with the v2 database:

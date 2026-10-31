@@ -168,3 +168,42 @@ def test_migration_reads_v1_and_builds_v2():
         client.drop_database(src)
         client.drop_database(dst)
         client.close()
+
+
+@needs_db
+def test_migration_prefix_mode_keeps_v1_in_same_database():
+    client = MongoClient(URI)
+    name = f"test_same_{uuid.uuid4().hex[:8]}"
+    db = client[name]
+    try:
+        paddy = ObjectId()
+        db.commodity_alias_lookup.insert_one({"_id": paddy, "canonical_name": "paddy", "aliases": ["paddy"]})
+        db.available_mandi.insert_one({"name": "pendurthi apmc", "state": "andhra pradesh", "aliases": []})
+        mc = ObjectId()
+        db.markets_commodities.insert_one({"_id": mc, "source_system": "agmarknet", "state": "andhra pradesh",
+                                           "market_name": "pendurthi apmc", "commodity_name": "paddy",
+                                           "commodity_alias_lookup_id": paddy, "market_id": None})
+        db.price_records.insert_one({"market_commodity_id": mc, "date": datetime(2026, 10, 28), "modal_price": 2441.0,
+                                     "commodity_alias_lookup_id": paddy})
+        v1 = ("markets_commodities", "price_records", "available_mandi", "commodity_alias_lookup")
+        before = {c: list(db[c].find()) for c in v1}
+
+        def run(*extra):
+            return subprocess.run([sys.executable, str(ROOT / "maintenance" / "migrate_v2.py"), "--uri", URI,
+                                   "--source", name, "--target", name, *extra], capture_output=True, text=True)
+
+        assert run().returncode != 0                      # same DB without a prefix is refused
+        out = run("--prefix", "v2_")
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert {c: list(db[c].find()) for c in v1} == before
+        assert "v2_available_mandi" not in db.list_collection_names()   # mandis are read in place
+        assert db.v2_listings.find_one({"_id": mc})["product_id"] is not None
+        assert "commodity_alias_lookup_id" not in db.v2_price_records.find_one()
+
+        assert run("--prefix", "v2_").returncode != 0      # v2 already has data
+        out = run("--prefix", "v2_", "--replace")
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert {c: list(db[c].find()) for c in v1} == before
+    finally:
+        client.drop_database(name)
+        client.close()

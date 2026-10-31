@@ -36,8 +36,9 @@ load_dotenv()
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = (os.getenv("MANDI_DB_NAME") or "").strip()
-RUNS_COLLECTION = (os.getenv("INGESTION_RUNS_COLLECTION") or "ingestion_runs").strip()
-REVIEW_COLLECTION = (os.getenv("REVIEW_ITEMS_COLLECTION") or "review_items").strip()
+V2_PREFIX = (os.getenv("V2_COLLECTION_PREFIX") or "").strip()
+RUNS_COLLECTION = (os.getenv("INGESTION_RUNS_COLLECTION") or f"{V2_PREFIX}ingestion_runs").strip()
+REVIEW_COLLECTION = (os.getenv("REVIEW_ITEMS_COLLECTION") or f"{V2_PREFIX}review_items").strip()
 
 # Cap per run so one broken source cannot flood the review list.
 MAX_PRICE_ITEMS_PER_RUN = 500

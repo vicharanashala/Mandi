@@ -24,9 +24,11 @@ from datetime import datetime, timezone
 
 from pymongo import ASCENDING, UpdateOne
 
-STATES_COLLECTION = (os.getenv("STATES_COLLECTION") or "states").strip()
-CROP_NAMES_COLLECTION = (os.getenv("CROP_NAMES_COLLECTION") or "crop_names").strip()
-MANDI_NAMES_COLLECTION = (os.getenv("MANDI_NAMES_COLLECTION") or "mandi_names").strip()
+# V2_COLLECTION_PREFIX lets v2 live next to v1 in the same database (e.g. "v2_").
+V2_PREFIX = (os.getenv("V2_COLLECTION_PREFIX") or "").strip()
+STATES_COLLECTION = (os.getenv("STATES_COLLECTION") or f"{V2_PREFIX}states").strip()
+CROP_NAMES_COLLECTION = (os.getenv("CROP_NAMES_COLLECTION") or f"{V2_PREFIX}crop_names").strip()
+MANDI_NAMES_COLLECTION = (os.getenv("MANDI_NAMES_COLLECTION") or f"{V2_PREFIX}mandi_names").strip()
 
 ANY_VARIETY = "*"
 

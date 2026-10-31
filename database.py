@@ -33,10 +33,24 @@ from catalog import Catalog, ensure_catalog_indexes
 # ─────────────────────────────────────────────
 MONGO_URI              = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME                = os.getenv("MANDI_DB_NAME", "").strip()
-MASTER_COLLECTION      = os.getenv('MASTER_COLLECTION').strip()  # dimension table
-PRICE_COLLECTION       = os.getenv('PRICE_COLLECTION').strip()         # fact / time-series table
+V2_PREFIX              = (os.getenv("V2_COLLECTION_PREFIX") or "").strip()
+MASTER_COLLECTION      = (os.getenv("MASTER_COLLECTION") or f"{V2_PREFIX}listings").strip()        # listings
+PRICE_COLLECTION       = (os.getenv("PRICE_COLLECTION") or f"{V2_PREFIX}price_records").strip()    # fact / time-series table
 
-ALL_MANDI_COLLECTION = os.getenv('ALL_MANDI_COLLECTION').strip()
+ALL_MANDI_COLLECTION = (os.getenv("ALL_MANDI_COLLECTION") or "available_mandi").strip()
+
+# v2 writes listings and prices in its own shape. Never let it write into the v1
+# collections when v1 and v2 share a database.
+_V1_DB_NAME = (os.getenv("V1_DB_NAME") or "Price").strip()
+if (
+    MASTER_COLLECTION == "markets_commodities"
+    or (V2_PREFIX and not PRICE_COLLECTION.startswith(V2_PREFIX))
+    or (DB_NAME == _V1_DB_NAME and not (V2_PREFIX and MASTER_COLLECTION.startswith(V2_PREFIX)))
+):
+    raise SystemExit(
+        f"Refusing to run: MASTER_COLLECTION={MASTER_COLLECTION!r}, PRICE_COLLECTION={PRICE_COLLECTION!r}. "
+        "The v2 scraper must write to v2 collections (set V2_COLLECTION_PREFIX, e.g. v2_)."
+    )
 
 # ─────────────────────────────────────────────
 # HELPERS
