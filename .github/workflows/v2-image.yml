@@ -35,14 +35,16 @@ jobs:
     steps:
       - name: Start a throwaway MongoDB
         run: |
-          docker run -d --name test-mongo -p 27017:27017 mongo:8
+          # mongo:7 for tests only (mongo:8 does not start on the current runner image).
+          docker run -d --name test-mongo -p 27017:27017 mongo:7
           for i in $(seq 1 60); do
             if docker exec test-mongo mongosh --quiet --eval "db.runCommand({ ping: 1 }).ok" 2>/dev/null | grep -q 1; then
               echo "MongoDB is up"; exit 0
             fi
             sleep 2
           done
-          echo "::error title=mongodb::MongoDB did not start"; docker logs test-mongo | tail -50; exit 1
+          echo "::error title=mongodb::MongoDB did not start: $(docker logs test-mongo 2>&1 | tail -5 | tr '\n' ' ' | cut -c1-600)"
+          exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
