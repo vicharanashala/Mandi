@@ -103,11 +103,17 @@ def main() -> None:
 
     client = MongoClient(args.uri, serverSelectionTimeoutMS=15000)
     src, dst = client[args.source], client[args.target]
-    if dst.list_collection_names():
-        if not args.replace:
-            raise SystemExit(f"Target database {args.target!r} is not empty. Use --replace to rebuild it.")
-        print(f"[INFO] Dropping target database {args.target!r}")
-        client.drop_database(args.target)
+    existing = dst.list_collection_names()
+    if existing:
+        has_data = [c for c in existing if dst[c].estimated_document_count() > 0]
+        if args.replace:
+            print(f"[INFO] Dropping target database {args.target!r}")
+            client.drop_database(args.target)
+        elif has_data:
+            raise SystemExit(f"Target database {args.target!r} already has data in {has_data}. Use --replace to rebuild it.")
+        else:
+            # e.g. a database created in the Atlas UI, which requires a first (empty) collection
+            print(f"[INFO] Target {args.target!r} has only empty collections {existing}; using it.")
     now = datetime.now(timezone.utc)
 
     # ── 1. Server-side copies (v1 is only read) ──────────────────────────
