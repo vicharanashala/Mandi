@@ -504,7 +504,7 @@ def upload_to_mongo(
     documents: list[dict],
     uri: str     = MONGO_URI,
     db_name: str = DB_NAME,
-) -> None:
+) -> dict:
     """
     For each normalised document:
       1. Upsert into markets_commodities using $setOnInsert
@@ -799,23 +799,14 @@ def get_commodity_alias_lookup_id(commodity_name: str) -> object | None:
             _commodity_alias_lookup_id_cache[key] = None
             return None
 
-        # 1. Exact alias match
+        # Exact alias match only. A name with no exact match stays unmapped
+        # and is listed in review_items for a person to map — a partial match
+        # here is how "cow" ended up under cowpea.
         doc = coll.find_one(
             {"aliases": key},
             projection={"_id": 1},
         )
-        if doc:
-            result = doc["_id"]
-            _commodity_alias_lookup_id_cache[key] = result
-            return result
-
-        # 2. Case-insensitive regex fallback
-        pattern  = re.compile(re.escape(key), re.IGNORECASE)
-        fallback = coll.find_one(
-            {"aliases": {"$regex": pattern}},
-            projection={"_id": 1},
-        )
-        result = fallback["_id"] if fallback else None
+        result = doc["_id"] if doc else None
         _commodity_alias_lookup_id_cache[key] = result
         return result
     except Exception as exc:
@@ -872,8 +863,9 @@ def get_market_id(market_name: str, state: str | None = None) -> object | None:
       3. Suffix variations (only if exact match was not found):
          - try stripped suffix (" apmc", " mandi", " market", " sub yard")
          - try with " apmc" appended
-      4. Regex / partial match on `aliases`
-      5. Cross-state fallback (exact match across all states)
+      4. Cross-state fallback (exact match across all states)
+    A partial-name match is deliberately not tried; unresolved mandis are
+    listed in review_items instead.
 
     Results are cached in-process to avoid repeated round trips.
     Returns the document's ObjectId, or None if not found.
@@ -940,17 +932,10 @@ def get_market_id(market_name: str, state: str | None = None) -> object | None:
                 _market_id_cache[cache_key] = doc["_id"]
                 return doc["_id"]
 
-        # ── Step 4: Regex fallback on `aliases` (partial match) ────────
-        pattern = re.compile(re.escape(key), re.IGNORECASE)
-        fallback = coll.find_one(
-            {"aliases": {"$regex": pattern}, **state_filter},
-            projection={"_id": 1},
-        )
-        if fallback:
-            _market_id_cache[cache_key] = fallback["_id"]
-            return fallback["_id"]
+        # (No partial-name match: an unknown mandi stays unresolved and is
+        # listed in review_items instead of being attached to a lookalike.)
 
-        # ── Step 5: Cross-state fallback (exact name/alias across DB) ──
+        # ── Step 4: Cross-state fallback (exact name/alias across DB) ──
         cross_doc = coll.find_one(
             {"$or": [
                 {"name": {"$regex": re.compile(f"^{re.escape(key)}$", re.IGNORECASE)}},

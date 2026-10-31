@@ -5,7 +5,11 @@ Populate commodity_alias_lookup using agriai.crop_master and scraped name mappin
 then backfill commodity_alias_lookup_id into markets_commodities and price_records.
 
 Usage:
-    .venv/bin/python populate_and_backfill_aliases.py
+    .venv/bin/python populate_and_backfill_aliases.py          # save guesses to review_items only
+    .venv/bin/python populate_and_backfill_aliases.py --apply  # old behaviour: write guesses directly
+
+By default nothing is inserted or attached: every guess goes to review_items
+for a person to approve on the review website (see backfill_commodity_aliases.py).
 """
 
 from __future__ import annotations
@@ -20,6 +24,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from pymongo import MongoClient, UpdateMany
+
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from review_log import save_mapping_suggestions  # noqa: E402
+
 
 # Load .env dynamically from workspace root
 _ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -158,6 +168,26 @@ def main() -> None:
         )
     )
     print(f"[INFO] Unique unmatched commodity names: {len(unmatched)}")
+
+    if "--apply" not in sys.argv:
+        suggestions = []
+        for row in unmatched:
+            name = (row["_id"] or "").strip()
+            if not name:
+                continue
+            doc, score, second = _best_lookup(name, lookup_docs)
+            suggestions.append({
+                "name": name, "records": row["n"],
+                "group_id": doc["_id"] if doc is not None else None,
+                "group_name": doc.get("canonical_name") if doc is not None else None,
+                "score": score,
+                "reason": f"look-alike score {score:.3f} (next best {second:.3f})",
+            })
+        saved = save_mapping_suggestions(db, suggestions, "populate_and_backfill_aliases")
+        print(f"[DONE] Saved {saved} suggestion(s) to review_items. Nothing else was changed.")
+        print("       Review them on the website, or re-run with --apply to write them directly.")
+        client.close()
+        return
 
     # Step 4: Resolution & Enrichment Phase using agriai.crop_master and Candidate Matching
     new_lookup_inserted = 0
