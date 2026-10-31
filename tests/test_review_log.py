@@ -18,8 +18,8 @@ NOW = datetime(2026, 10, 31, 6, 0, tzinfo=timezone.utc)
 def _doc(**kw) -> dict:
     base = {
         "source_state": "agmarknet", "source_system": "agmarknet", "state": "andhra pradesh",
-        "market_name": "pendurthi apmc", "market_id": "m1", "commodity_name": "paddy(common)",
-        "commodity_alias_lookup_id": "a1", "variety": "paddy", "date": NOW,
+        "market_name": "pendurthi apmc", "mandi_id": "m1", "commodity_name": "paddy(common)",
+        "product_id": "a1", "variety": "paddy", "date": NOW,
         "min_price": 2400.0, "max_price": 2500.0, "modal_price": 2441.0,
     }
     base.update(kw)
@@ -37,8 +37,8 @@ def test_price_problems_flags_bad_prices_only() -> None:
 def test_summary_collects_unmapped_and_unknown() -> None:
     docs = [
         _doc(),
-        _doc(commodity_name="paddy-sona", commodity_alias_lookup_id=None),
-        _doc(market_name="new mandi", market_id=None),
+        _doc(commodity_name="paddy-sona", product_id=None),
+        _doc(market_name="new mandi", mandi_id=None),
     ]
     s = summarise_documents(docs)
     assert s["by_source"]["agmarknet"]["records"] == 3
@@ -68,12 +68,11 @@ def test_run_documents_per_source_plus_pipeline() -> None:
 
 def test_review_ops_are_keyed_upserts() -> None:
     merged = {"agmarknet": {"success": True, "data": []}, "Punjab": {"success": False, "error": "x"}}
-    s = summarise_documents([_doc(commodity_name="hen", commodity_alias_lookup_id=None, max_price=100.0)])
+    s = summarise_documents([_doc(commodity_name="hen", product_id=None, max_price=100.0)])
     ops = build_review_ops(merged, s, "run1", NOW)
     keys = sorted(op._filter["key"] for op in ops)
     assert keys == [
         "price_invalid|agmarknet|andhra pradesh|pendurthi apmc|hen|paddy|2026-10-31",
         "run_failed|Punjab|2026-10-31",
-        "unmapped_commodity|hen",
-    ]
+    ]  # unmatched names are pending rows in crop_names, not review items
     assert all(op._upsert for op in ops)

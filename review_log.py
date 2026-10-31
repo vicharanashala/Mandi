@@ -12,9 +12,12 @@ Two collections (names overridable via env):
 
 review_items types written here:
   run_failed          a source returned success=False
-  unmapped_commodity  a crop name with no exact alias match
-  unknown_market      a mandi name with no match in available_mandi
+  unknown_state       a state spelling not in the states collection
   price_invalid       min > max, modal outside min–max, or a price <= 0
+
+Crop and mandi names are NOT review items: a new name is stored as a pending
+row in crop_names / mandi_names (see catalog.py), and that row is what a
+reviewer approves. The run log still counts how many were unmatched.
 
 Nothing in this module may break the pipeline: every write is best-effort.
 """
@@ -86,7 +89,7 @@ def summarise_documents(documents: list[dict]) -> dict:
         if market:
             st["markets"].add(market)
 
-        if commodity and doc.get("commodity_alias_lookup_id") is None:
+        if commodity and doc.get("product_id") is None:
             st["unmapped_commodities"].add(commodity)
             item = unmapped.setdefault(commodity, {
                 "records": 0, "states": set(), "sources": set(), "markets": set(),
@@ -97,7 +100,7 @@ def summarise_documents(documents: list[dict]) -> dict:
             if market and len(item["markets"]) < SAMPLE_MARKETS:
                 item["markets"].add(market)
 
-        if market and doc.get("market_id") is None:
+        if market and doc.get("mandi_id") is None:
             st["unknown_markets"].add(market)
             item = unknown_markets.setdefault((state, market), {
                 "records": 0, "sources": set(), "commodities": set(),
@@ -218,16 +221,9 @@ def build_review_ops(merged: dict, summary: dict, run_id: str, now: datetime) ->
         upsert(f"run_failed|{source}|{day}", "run_failed", f"{source} scrape failed on {day}",
                {"error": str(error)[:1000], "date": day}, source=source)
 
-    for name, info in summary["unmapped"].items():
-        upsert(f"unmapped_commodity|{name}", "unmapped_commodity", f"Crop name not matched: {name}",
-               {"commodity_name": name}, records=info["records"],
-               add_to_set={"states": info["states"], "sources": info["sources"],
-                           "sample_markets": info["markets"]})
-
-    for (state, market), info in summary["unknown_markets"].items():
-        upsert(f"unknown_market|{state}|{market}", "unknown_market", f"Mandi not found: {market} ({state})",
-               {"market_name": market}, state=state, records=info["records"],
-               add_to_set={"sources": info["sources"], "sample_commodities": info["commodities"]})
+    for spelling, count in (summary.get("unknown_states") or {}).items():
+        upsert(f"unknown_state|{spelling}", "unknown_state", f"State spelling not known: {spelling}",
+               {"spelling": spelling}, records=count)
 
     for bad in summary["bad_prices"]:
         doc = bad["doc"]
@@ -267,12 +263,13 @@ def save_run(
     date_str: str = "",
     uri: str = MONGO_URI,
     db_name: str = DB_NAME,
+    run_id: str | None = None,
 ) -> str | None:
     """Write this run to ingestion_runs and its problems to review_items. Never raises."""
     if not db_name:
         print("[WARN] review_log: MANDI_DB_NAME not set — run not recorded.")
         return None
-    run_id = uuid.uuid4().hex
+    run_id = run_id or uuid.uuid4().hex
     now = datetime.now(timezone.utc)
     if started_at.tzinfo is None:
         started_at = started_at.astimezone(timezone.utc)
@@ -281,6 +278,7 @@ def save_run(
         db = client[db_name]
         ensure_indexes(db)
         summary = summarise_documents(documents)
+        summary["unknown_states"] = {s: 1 for s in (upload_stats or {}).get("unknown_states") or []}
         run_docs = build_run_documents(merged, summary, upload_stats, run_id, started_at, now, date_str)
         db[RUNS_COLLECTION].insert_many(run_docs)
         ops = build_review_ops(merged, summary, run_id, now)
@@ -292,35 +290,3 @@ def save_run(
     except Exception as exc:
         print(f"[WARN] review_log: could not save run: {exc}")
         return None
-
-
-def save_mapping_suggestions(db, suggestions: list[dict], script: str) -> int:
-    """
-    Store fuzzy-match guesses from maintenance scripts as review_items for a
-    person to approve, instead of writing them into commodity_alias_lookup.
-
-    Each suggestion: {"name", "records", "group_id", "group_name", "score", "reason"}.
-    """
-    now = datetime.now(timezone.utc)
-    ops = []
-    for s in suggestions:
-        name = s["name"]
-        ops.append(UpdateOne(
-            {"key": f"unmapped_commodity|{name}"},
-            {
-                "$setOnInsert": {"key": f"unmapped_commodity|{name}", "type": "unmapped_commodity",
-                                 "status": "open", "first_seen": now,
-                                 "title": f"Crop name not matched: {name}",
-                                 "details": {"commodity_name": name}},
-                "$set": {"last_seen": now, "records_seen": s.get("records", 0),
-                         "suggestion": {"group_id": s.get("group_id"), "group_name": s.get("group_name"),
-                                        "score": round(float(s.get("score") or 0), 3),
-                                        "reason": s.get("reason"), "by": script, "at": now}},
-            },
-            upsert=True,
-        ))
-    if not ops:
-        return 0
-    ensure_indexes(db)
-    db[REVIEW_COLLECTION].bulk_write(ops, ordered=False)
-    return len(ops)

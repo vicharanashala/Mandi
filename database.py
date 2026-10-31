@@ -26,6 +26,7 @@ import json
 
 load_dotenv()
 from utils.sources import sources
+from catalog import Catalog, ensure_catalog_indexes
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -143,8 +144,6 @@ def _norm_karnataka(record: dict, state: str) -> dict:
         state                      = state.lower(),
         date                       = _parse_date(record.get("Date")),
         market_name                = market_name,
-        market_id                  = get_market_id(market_name, state),
-        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("Commodity"))),
         commodity_group            = _lower(record.get("Group")),
         commodity_name             = _lower(record.get("Commodity")),
         variety                    = _lower(record.get("Variety")),
@@ -166,8 +165,6 @@ def _norm_meghalaya(record: dict, state: str) -> dict:
         state                      = state.lower(),
         date                       = _parse_date(record.get("date")),
         market_name                = market_name,
-        market_id                  = get_market_id(market_name, state),
-        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("commodity_name"))),
         commodity_group            = _lower(record.get("Group Name")),
         commodity_name             = _lower(record.get("commodity_name")),
         variety                    = _lower(record.get("Variety")),
@@ -189,8 +186,6 @@ def _norm_nagaland(record: dict, state: str) -> dict:
         state                      = state.lower(),
         date                       = _parse_date(record.get("Arrival Date")),
         market_name                = market_name,
-        market_id                  = get_market_id(market_name, state),
-        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("commodity_name"))),
         commodity_group            = None,
         commodity_name             = _lower(record.get("Commodity")),
         variety                    = _lower(record.get("Variety")),
@@ -212,8 +207,6 @@ def _norm_maharashtra(record: dict, state: str) -> dict:
         state                      = state.lower(),
         date                       = _parse_date(record.get("date")),
         market_name                = market_name,
-        market_id                  = get_market_id(market_name, state),
-        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("commodity"))),
         commodity_group            = None,
         commodity_name             = _lower(record.get("commodity")),
         variety                    = _lower(record.get("variety")),
@@ -236,8 +229,6 @@ def _norm_uttar_pradesh(record: dict, state: str) -> dict:
         state                      = state.lower(),
         date                       = _parse_date(record.get("Date")),
         market_name                = market_name,
-        market_id                  = get_market_id(market_name, state) if market_name else None,
-        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(commodity_name),
         commodity_group            = _lower(record.get("MainProductName") or record.get("Category")),
         commodity_name             = commodity_name,
         variety                    = None,
@@ -260,8 +251,6 @@ def _norm_punjab(record: dict, state: str) -> dict:
         state                      = state.lower(),
         date                       = _parse_date(record.get("EntryDate") or record.get("Date")),
         market_name                = market_name,
-        market_id                  = get_market_id(market_name, state) if market_name else None,
-        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(commodity_name),
         commodity_group            = None,
         commodity_name             = commodity_name,
         variety                    = None,
@@ -297,8 +286,6 @@ def _norm_agmarknet(record: dict, state: str) -> dict:
             record.get("arrival_date") or record.get("Arrival_Date") or record.get("reported_date")
         ),
         market_name                = market_name,
-        market_id                  = get_market_id(market_name, record_state),
-        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(commodity_name),
         commodity_group            = _lower(record.get("cmdt_grp_name")),
         commodity_name             = commodity_name,
         variety                    = _lower(
@@ -331,8 +318,6 @@ def _norm_andhra_pradesh(record: dict, state: str) -> dict:
         state                      = state.lower(),
         date                       = _parse_date(record.get("tranDate")),
         market_name                = market_name,
-        market_id                  = get_market_id(market_name, state),
-        commodity_alias_lookup_id  = get_commodity_alias_lookup_id(_lower(record.get("commodity"))),
         commodity_group            = None,
         commodity_name             = _lower(record.get("commodity")),
         variety                    = _lower(record.get("variety")),
@@ -365,17 +350,15 @@ STATE_NORMALISERS = {
 
 # Fields that belong to the master/dimension table
 MASTER_FIELDS = {
-    "source_system", "state", "market_name", "market_id",
-    "commodity_alias_lookup_id", "commodity_group", "commodity_name",
+    "source_system", "state", "market_name", "commodity_group", "commodity_name",
     "variety", "grade", "source_url", "source_name", "method",
 }
 
-# Fields that belong to the price fact table
-# market_id and commodity_alias_lookup_id are also written here so that
-# price records can be queried independently without a join.
+# Fields that belong to the price fact table. Prices point only at their
+# listing (market_commodity_id); crop and mandi come from the listing.
 PRICE_FIELDS = {
     "date", "arrival_quantity", "min_price", "max_price",
-    "modal_price", "ingested_at", "market_id", "commodity_alias_lookup_id",
+    "modal_price", "ingested_at",
 }
 
 # Compound key that uniquely identifies a market+commodity combo
@@ -478,6 +461,8 @@ def ensure_indexes(master_coll, price_coll) -> None:
     )
     _create_index_safe(master_coll, [("state",          ASCENDING)], name="idx_mc_state")
     _create_index_safe(master_coll, [("commodity_name", ASCENDING)], name="idx_mc_commodity")
+    _create_index_safe(master_coll, [("product_id", ASCENDING), ("mandi_id", ASCENDING)], name="idx_listing_product_mandi")
+    _create_index_safe(master_coll, [("mandi_id", ASCENDING)], name="idx_listing_mandi")
 
     # ── price_records ─────────────────────────────────────────────────
     # Unique: one price entry per master combo per date
@@ -504,13 +489,21 @@ def upload_to_mongo(
     documents: list[dict],
     uri: str     = MONGO_URI,
     db_name: str = DB_NAME,
+    run_id: str | None = None,
 ) -> dict:
     """
     For each normalised document:
-      1. Upsert into markets_commodities using $setOnInsert
-         (meta fields written only on first insert, never overwritten).
-      2. Use the returned _id as market_commodity_id in price_records.
-      3. Upsert into price_records (one price row per combo per date).
+      1. Upsert the listing (MASTER_COLLECTION, normally "listings") using
+         $setOnInsert for its identity fields. state_code, product_id and
+         mandi_id are $set every run from the approved links in catalog.py:
+         the approved id, or null while a name is pending or rejected.
+      2. Use the listing _id as market_commodity_id in price_records.
+      3. Upsert into price_records (one price row per listing per date),
+         tagged with run_id. Prices carry no crop or mandi ids.
+      4. Record every crop / mandi name seen; new ones are stored as pending.
+
+    Each document is annotated in place with state_code / product_id /
+    mandi_id so the run log can count what is still unmatched.
 
     Null fields are stripped before writing to save storage.
 
@@ -526,6 +519,8 @@ def upload_to_mongo(
         "price_errors": 0,
         "skipped_degenerate": 0,
         "unresolved_combos": 0,
+        "new_crop_names": 0,
+        "new_mandi_names": 0,
     }
 
     if not documents:
@@ -541,6 +536,9 @@ def upload_to_mongo(
     price_coll  = db[PRICE_COLLECTION]
 
     ensure_indexes(master_coll, price_coll)
+    ensure_catalog_indexes(db)
+    catalog = Catalog(db)
+    now = datetime.now(tz=timezone.utc)
 
     master_ops      = []   # bulk upserts for markets_commodities
     price_ops_meta  = []   # metadata needed to build price ops after bulk
@@ -574,19 +572,25 @@ def upload_to_mongo(
             if k in static_fields
         })
 
-        # market_id and commodity_alias_lookup_id go into $set so they are
-        # refreshed on every run and always present — even as null — so every
-        # document has a consistent schema regardless of lookup success.
+        # Crop and mandi come only from approved links, and are refreshed on
+        # every run so an approval, rejection or change takes effect at once.
+        state_code = catalog.state_code(filter_key["state"])
+        product_id = catalog.product_for(filter_key["source_system"], filter_key["commodity_name"], filter_key["variety"])
+        mandi_id = catalog.mandi_for(filter_key["source_system"], state_code, filter_key["market_name"])
+        doc["state_code"], doc["product_id"], doc["mandi_id"] = state_code, product_id, mandi_id
+
         set_always = {
-            "market_id":                master_doc.get("market_id"),
-            "commodity_alias_lookup_id": master_doc.get("commodity_alias_lookup_id"),
+            "state_code": state_code,
+            "product_id": product_id,
+            "mandi_id":   mandi_id,
+            "last_seen":  now,
         }
 
         master_ops.append(UpdateOne(
             filter_key,
             {
                 "$set":         set_always,
-                "$setOnInsert": set_on_insert,
+                "$setOnInsert": {**set_on_insert, "first_seen": now},
             },
             upsert=True,
         ))
@@ -604,12 +608,12 @@ def upload_to_mongo(
             result = master_coll.bulk_write(master_ops, ordered=False)
             stats["master_upserted"] = result.upserted_count
             stats["master_matched"]  = result.matched_count
-            print(f"[OK] markets_commodities — upserted: {result.upserted_count}, "
+            print(f"[OK] listings — upserted: {result.upserted_count}, "
                   f"matched: {result.matched_count}")
         except BulkWriteError as bwe:
             n_err = len(bwe.details.get("writeErrors", []))
             stats["master_errors"] = n_err
-            print(f"[WARN] markets_commodities bulk write had {n_err} error(s).")
+            print(f"[WARN] listings bulk write had {n_err} error(s).")
             for err in bwe.details.get("writeErrors", [])[:5]:
                 print(f"       {err}")
 
@@ -662,13 +666,10 @@ def upload_to_mongo(
                 continue
 
             # Keep null fields explicit so documents have a consistent schema.
-            # min_price / max_price / market_id / commodity_alias_lookup_id
-            # must appear as null rather than be absent from the document.
             clean_price = {
                 "market_commodity_id":       mc_id,
                 "date":                      date_val,
-                "market_id":                 price_doc.get("market_id"),
-                "commodity_alias_lookup_id": price_doc.get("commodity_alias_lookup_id"),
+                "run_id":                    run_id,
                 "arrival_quantity":          price_doc.get("arrival_quantity"),
                 "min_price":                 price_doc.get("min_price"),
                 "max_price":                 price_doc.get("max_price"),
@@ -707,250 +708,23 @@ def upload_to_mongo(
             for err in bwe.details.get("writeErrors", [])[:5]:
                 print(f"       {err}")
 
+    # ── Step 5: record names seen; new ones become pending links ─────
+    stats.update(catalog.flush(now))
+    stats["unknown_states"] = sorted(catalog.unknown_states)
+    print(f"[INFO] Names: {stats['new_crop_names']} new crop name(s), "
+          f"{stats['new_mandi_names']} new mandi name(s) waiting for review.")
+
     client.close()
     print("[INFO] Connection closed.")
     return stats
 
 
 # ─────────────────────────────────────────────
-# COMMODITY LOOKUP  (singleton client + cache)
+# NAME LOOKUPS
+# Crop and mandi names are resolved through person-approved links in
+# catalog.py (crop_names, mandi_names, states). There is deliberately no
+# fuzzy, partial or cross-state matching here any more.
 # ─────────────────────────────────────────────
-
-_lookup_client = None
-_lookup_coll   = None
-_commodity_id_cache: dict[str, str | None] = {}
-_commodity_alias_lookup_id_cache: dict[str, object | None] = {}
-
-
-def _get_lookup_collection(
-    uri: str       = MONGO_URI,
-    db_name: str   = DB_NAME,
-    coll_name: str = "commodity_alias_lookup",
-):
-    global _lookup_client, _lookup_coll
-    if not (isinstance(uri, str) and uri.strip() and
-            isinstance(db_name, str) and db_name.strip() and
-            isinstance(coll_name, str) and coll_name.strip()):
-        print("[WARN] Commodity alias lookup DB not configured — lookups disabled.")
-        return None
-    if _lookup_coll is None:
-        _lookup_client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        _lookup_coll   = _lookup_client[db_name][coll_name]
-        print("[INFO] Commodity alias lookup client connected.")
-    return _lookup_coll
-
-
-def get_commodity_id(commodity_name: str) -> str | None:
-    """Return crop_master_id from commodity_alias_lookup for the given name."""
-    if not isinstance(commodity_name, str) or not commodity_name.strip():
-        return None
-
-    key = commodity_name.strip().lower()
-
-    if key in _commodity_id_cache:
-        return _commodity_id_cache[key]
-
-    try:
-        coll = _get_lookup_collection()
-        if coll is None:
-            _commodity_id_cache[key] = None
-            return None
-
-        doc = coll.find_one(
-            {"aliases": key, "crop_master_id": {"$nin": [None, ""]}},
-            projection={"crop_master_id": 1, "_id": 0},
-        )
-        if doc:
-            result = doc["crop_master_id"]
-            _commodity_id_cache[key] = result
-            return result
-
-        pattern  = re.compile(re.escape(key), re.IGNORECASE)
-        fallback = coll.find_one(
-            {"aliases": {"$regex": pattern}, "crop_master_id": {"$nin": [None, ""]}},
-            projection={"crop_master_id": 1, "_id": 0},
-        )
-        result = fallback.get("crop_master_id") if fallback else None
-        _commodity_id_cache[key] = result
-        return result
-    except Exception as exc:
-        print(f"[WARN] crop_master_id lookup failed for '{key}': {exc}")
-        _commodity_id_cache[key] = None
-        return None
-
-
-def get_commodity_alias_lookup_id(commodity_name: str) -> object | None:
-    """
-    Return the ObjectId (_id) of the commodity_alias_lookup document
-    that matches the given commodity name via its aliases array.
-    This is distinct from get_commodity_id() which returns crop_master_id.
-    """
-    if not isinstance(commodity_name, str) or not commodity_name.strip():
-        return None
-
-    key = commodity_name.strip().lower()
-
-    if key in _commodity_alias_lookup_id_cache:
-        return _commodity_alias_lookup_id_cache[key]
-
-    try:
-        coll = _get_lookup_collection()
-        if coll is None:
-            _commodity_alias_lookup_id_cache[key] = None
-            return None
-
-        # Exact alias match only. A name with no exact match stays unmapped
-        # and is listed in review_items for a person to map — a partial match
-        # here is how "cow" ended up under cowpea.
-        doc = coll.find_one(
-            {"aliases": key},
-            projection={"_id": 1},
-        )
-        result = doc["_id"] if doc else None
-        _commodity_alias_lookup_id_cache[key] = result
-        return result
-    except Exception as exc:
-        print(f"[WARN] commodity_alias_lookup _id lookup failed for '{key}': {exc}")
-        _commodity_alias_lookup_id_cache[key] = None
-        return None
-
-
-# ─────────────────────────────────────────────
-# MARKET LOOKUP  (singleton client + cache)
-# Looks up ALL_MANDI_COLLECTION by `name` first,
-# then falls back to the `aliases` array.
-# ─────────────────────────────────────────────
-
-_market_lookup_client = None
-_market_lookup_coll   = None
-_market_id_cache: dict[str, object | None] = {}
-
-
-def _get_market_lookup_collection(
-    uri: str       = MONGO_URI,
-    db_name: str   = DB_NAME,
-    coll_name: str = ALL_MANDI_COLLECTION,
-):
-    global _market_lookup_client, _market_lookup_coll
-    if not (isinstance(uri, str) and uri.strip() and
-            isinstance(db_name, str) and db_name.strip() and
-            isinstance(coll_name, str) and coll_name.strip()):
-        print("[WARN] Market lookup DB not configured — market_id lookups disabled.")
-        return None
-    if _market_lookup_coll is None:
-        _market_lookup_client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        _market_lookup_coll   = _market_lookup_client[db_name][coll_name]
-        print("[INFO] Market lookup client connected.")
-    return _market_lookup_coll
-
-
-STATE_CANONICAL_MAP = {
-    "keralam": "kerala",
-    "chattisgarh": "chhattisgarh",
-    "nct of delhi": "delhi",
-    "pondicherry": "puducherry",
-    "orissa": "odisha",
-}
-
-
-def get_market_id(market_name: str, state: str | None = None) -> object | None:
-    """
-    Resolve a market name to its MongoDB _id from ALL_MANDI_COLLECTION.
-
-    Lookup order:
-      1. Exact match on `name` (case-insensitive, state-filtered)
-      2. Exact match in `aliases` array (case-insensitive, state-filtered)
-      3. Suffix variations (only if exact match was not found):
-         - try stripped suffix (" apmc", " mandi", " market", " sub yard")
-         - try with " apmc" appended
-      4. Cross-state fallback (exact match across all states)
-    A partial-name match is deliberately not tried; unresolved mandis are
-    listed in review_items instead.
-
-    Results are cached in-process to avoid repeated round trips.
-    Returns the document's ObjectId, or None if not found.
-    """
-    if not isinstance(market_name, str) or not market_name.strip():
-        return None
-
-    key = market_name.strip().lower()
-    state_raw = state.strip().lower() if isinstance(state, str) and state.strip() else None
-    state_canonical = STATE_CANONICAL_MAP.get(state_raw, state_raw) if state_raw else None
-    cache_key = f"{state_canonical}||{key}" if state_canonical else key
-
-    if cache_key in _market_id_cache:
-        return _market_id_cache[cache_key]
-
-    try:
-        coll = _get_market_lookup_collection()
-        if coll is None:
-            _market_id_cache[cache_key] = None
-            return None
-
-        state_filter = {"state": {"$regex": re.compile(f"^{re.escape(state_canonical)}$", re.IGNORECASE)}} \
-            if state_canonical else {}
-
-        # ── Step 1: Exact match on `name` ──────────────────────────────
-        doc = coll.find_one(
-            {"name": {"$regex": re.compile(f"^{re.escape(key)}$", re.IGNORECASE)},
-             **state_filter},
-            projection={"_id": 1},
-        )
-        if doc:
-            _market_id_cache[cache_key] = doc["_id"]
-            return doc["_id"]
-
-        # ── Step 2: Exact element match in `aliases` array ────────────
-        doc = coll.find_one(
-            {"aliases": {"$regex": re.compile(f"^{re.escape(key)}$", re.IGNORECASE)},
-             **state_filter},
-            projection={"_id": 1},
-        )
-        if doc:
-            _market_id_cache[cache_key] = doc["_id"]
-            return doc["_id"]
-
-        # ── Step 3: Suffix Variations (Only if exact match not found) ──
-        # e.g., "kolar" vs "kolar apmc", "mysore mandi" vs "mysore"
-        suffix_patterns = []
-        if not key.endswith(" apmc"):
-            suffix_patterns.append(f"^{re.escape(key)}\\s+apmc$")
-        stripped = re.sub(r"\s*(apmc|mandi|market|sub yard|yard)\b", "", key).strip()
-        if stripped and stripped != key:
-            suffix_patterns.append(f"^{re.escape(stripped)}$")
-            suffix_patterns.append(f"^{re.escape(stripped)}\\s+apmc$")
-
-        for sp in suffix_patterns:
-            doc = coll.find_one(
-                {"$or": [
-                    {"name": {"$regex": re.compile(sp, re.IGNORECASE)}},
-                    {"aliases": {"$regex": re.compile(sp, re.IGNORECASE)}},
-                ], **state_filter},
-                projection={"_id": 1},
-            )
-            if doc:
-                _market_id_cache[cache_key] = doc["_id"]
-                return doc["_id"]
-
-        # (No partial-name match: an unknown mandi stays unresolved and is
-        # listed in review_items instead of being attached to a lookalike.)
-
-        # ── Step 4: Cross-state fallback (exact name/alias across DB) ──
-        cross_doc = coll.find_one(
-            {"$or": [
-                {"name": {"$regex": re.compile(f"^{re.escape(key)}$", re.IGNORECASE)}},
-                {"aliases": {"$regex": re.compile(f"^{re.escape(key)}$", re.IGNORECASE)}},
-            ]},
-            projection={"_id": 1},
-        )
-        result = cross_doc["_id"] if cross_doc else None
-        _market_id_cache[cache_key] = result
-        return result
-
-    except Exception as exc:
-        print(f"[WARN] market_id lookup failed for '{key}' (state={state_canonical}): {exc}")
-        _market_id_cache[cache_key] = None
-        return None
 
 
 # ─────────────────────────────────────────────

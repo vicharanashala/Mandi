@@ -45,6 +45,7 @@ import asyncio
 import json
 import logging
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -269,7 +270,7 @@ def step5_save_json(merged: dict, path: str = "final_data.json") -> None:
 # STEP 6 — Normalise + upload to MongoDB
 # ─────────────────────────────────────────────────────────────────────────────
 
-def step6_upload(merged: dict) -> tuple[int, dict, list[dict]]:
+def step6_upload(merged: dict, run_id: str | None = None) -> tuple[int, dict, list[dict]]:
     """
     Normalise every state's raw records into the unified schema and
     bulk-upsert them into MongoDB.
@@ -287,7 +288,7 @@ def step6_upload(merged: dict) -> tuple[int, dict, list[dict]]:
     try:
         docs = normalise_all(merged)
         logger.info("Normalised %d documents. Uploading to MongoDB.", len(docs))
-        upload_stats = upload_to_mongo(docs)
+        upload_stats = upload_to_mongo(docs, run_id=run_id)
         logger.info("MongoDB upload complete.")
         return len(docs), upload_stats or {}, docs
     except Exception as exc:
@@ -311,7 +312,8 @@ async def run_pipeline(date_str: str = "", skip_agmarknet: bool = False) -> None
     7. Send email notification with complete run details
     """
     start = datetime.now()
-    logger.info("APMC scraper started at %s.", start.strftime("%Y-%m-%d %H:%M:%S"))
+    run_id = uuid.uuid4().hex
+    logger.info("APMC scraper started at %s (run %s).", start.strftime("%Y-%m-%d %H:%M:%S"), run_id)
 
     if skip_agmarknet:
         logger.info("Skipping Agmarknet scrape (skip_agmarknet=True) …")
@@ -349,13 +351,13 @@ async def run_pipeline(date_str: str = "", skip_agmarknet: bool = False) -> None
     step5_save_json(merged)
 
     # Step 6 — upload to MongoDB
-    normalised_count, upload_stats, docs = step6_upload(merged)
+    normalised_count, upload_stats, docs = step6_upload(merged, run_id=run_id)
 
     elapsed = (datetime.now() - start).total_seconds()
     log_scraping_summary(merged, elapsed)
 
     # Record the run and its problems for the review website (never raises)
-    save_run(merged, docs, upload_stats, started_at=start, date_str=date_str)
+    save_run(merged, docs, upload_stats, started_at=start, date_str=date_str, run_id=run_id)
 
     # Step 7 — Send email notification with complete run details
     try:

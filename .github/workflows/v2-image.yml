@@ -1,0 +1,79 @@
+name: v2 - Test, Build & Push image
+
+# ------------------------------------------------------------------------------
+# v2 data model (approved name links). Runs only for the feat/catalog-v2 branch;
+# main and its scheduled scraper are not affected.
+#
+# Image: vicharanashala/mandi-scrapping:v2-<commit sha>  and  :v2-latest
+#
+# Required GitHub Secrets (already used by dockerhub.yml):
+#   - DOCKERHUB_USERNAME
+#   - DOCKERHUB_TOKEN
+#
+# Run the image against the v2 database, e.g.:
+#   docker run --rm \
+#     -e MONGO_URI=... -e MANDI_DB_NAME=PriceV2 \
+#     -e MASTER_COLLECTION=listings -e PRICE_COLLECTION=price_records \
+#     -e ALL_MANDI_COLLECTION=available_mandi \
+#     vicharanashala/mandi-scrapping:v2-latest
+# ------------------------------------------------------------------------------
+
+on:
+  push:
+    branches:
+      - feat/catalog-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (with a throwaway MongoDB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mongo:
+        image: mongo:8
+        ports:
+          - 27017:27017
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Test
+        env:
+          TEST_MONGO_URI: mongodb://127.0.0.1:27017
+          MASTER_COLLECTION: listings
+          PRICE_COLLECTION: price_records
+          ALL_MANDI_COLLECTION: available_mandi
+        run: python -m pytest -q tests
+
+  build-and-push:
+    name: Build & Push
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY"
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            vicharanashala/mandi-scrapping:v2-${{ github.sha }}
+            vicharanashala/mandi-scrapping:v2-latest

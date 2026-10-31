@@ -12,6 +12,12 @@ This system ingests data from central government feeds (**Agmarknet / data.gov.i
 
 ---
 
+> **Branch `feat/catalog-v2` — v2 data model.** On this branch the scraper no longer guesses which crop or
+> mandi a name means. Names are matched only through person-approved links (`crop_names`, `mandi_names`,
+> `states`); new names are stored as *pending* and get no crop or mandi until someone approves them on the
+> review website. Listings live in `listings` (same `_id`s as v1 `markets_commodities`); prices point only at
+> their listing. See [v2 data model](#-v2-data-model-branch-featcatalog-v2) below.
+
 ## 📑 Table of Contents
 
 1. [Architectural Overview](#-architectural-overview)
@@ -297,4 +303,58 @@ pip install -r requirements.txt
 
 # 4. Install Playwright browser binaries with system dependencies
 python -m playwright install --with-deps chromium
+```
+
+
+---
+
+## 🧭 v2 data model (branch feat/catalog-v2)
+
+### Why
+v1 matched crop and mandi names by guessing (substring and look-alike matches), and copied the guessed group
+id onto every listing and price on every run. That put `hen` under groundnut and `tur` under brinjal, made fixes
+disappear on the next scrape, and meant every fix rewrote price history.
+
+### Collections (v2 database, e.g. `PriceV2`)
+| Collection | What it holds |
+| --- | --- |
+| `listings` | v1 `markets_commodities` with the same `_id`s, plus `state_code`, `product_id`, `mandi_id` |
+| `price_records` | prices; each points only at its listing (`market_commodity_id`) and the `run_id` that wrote it |
+| `crops`, `products` | crop → products, with a default product per crop |
+| `crop_names` | `(source, raw_name, raw_variety)` → `product_id`, `status` pending / approved / rejected |
+| `mandi_names` | `(source, state_code, raw_name)` → `mandi_id` (an `available_mandi` `_id`), `status` |
+| `states` | state code → every spelling the sources use |
+| `available_mandi` | unchanged schema |
+| `ingestion_runs`, `review_items`, `audit_log` | run log, problems for review, website change history |
+
+### What the scraper does on each run
+1. Parse and normalise as before.
+2. For every listing: look up the state code, the crop name link and the mandi name link (`catalog.py`).
+   `product_id` / `mandi_id` are set from **approved** links only, and cleared if a link is pending or rejected.
+3. New names are inserted as `pending`; they show no price until approved.
+4. Prices are upserted with the listing id and `run_id`.
+5. `review_log.py` records the run per source and state, and adds review items for failed sources,
+   unknown state spellings and impossible prices.
+
+### Building the v2 database
+```bash
+python maintenance/migrate_v2.py --source Price --target PriceV2      # v1 is only read
+```
+It copies `available_mandi`, `price_records` and `markets_commodities` (as `listings`) server-side, builds
+crops/products from the v1 groups, and creates one link per name. A link starts approved (marked
+`decided_by: migration`, `needs_check: true`) only when the v1 match was unambiguous and plausible;
+everything else starts pending with the v1 answer kept as a suggestion.
+
+### Running v2
+Push to `feat/catalog-v2` and the **v2 - Test, Build & Push image** workflow runs the tests and pushes
+`vicharanashala/mandi-scrapping:v2-<sha>` and `:v2-latest`. Run it with the v2 database:
+```bash
+docker run --rm -e MONGO_URI=... -e MANDI_DB_NAME=PriceV2 -e MASTER_COLLECTION=listings \
+  -e PRICE_COLLECTION=price_records -e ALL_MANDI_COLLECTION=available_mandi \
+  vicharanashala/mandi-scrapping:v2-latest
+```
+
+### Tests
+```bash
+TEST_MONGO_URI=mongodb://127.0.0.1:27017 pytest tests     # v2 tests need a throwaway MongoDB
 ```
