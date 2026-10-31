@@ -4,7 +4,13 @@ on the closest canonical (or alias) lookup row, then fill
 commodity_alias_lookup_id on markets_commodities and price_records.
 
 Usage:
-    python backfill_commodity_aliases.py
+    python backfill_commodity_aliases.py          # save guesses to review_items only
+    python backfill_commodity_aliases.py --apply  # old behaviour: write guesses directly
+
+By default nothing is written to commodity_alias_lookup, markets_commodities
+or price_records: every guess goes to review_items for a person to approve on
+the review website. Automatic look-alike matching is what put "hen" under
+groundnut, so --apply should only be used on a list someone has checked.
 """
 
 from __future__ import annotations
@@ -18,6 +24,13 @@ from difflib import SequenceMatcher
 
 from dotenv import load_dotenv
 from pymongo import MongoClient, UpdateMany
+
+import sys
+from pathlib import Path as _Path
+
+sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+from review_log import save_mapping_suggestions  # noqa: E402
+
 
 load_dotenv()
 
@@ -204,6 +217,22 @@ def main() -> None:
         mapped.append((n, name, doc.get("canonical_name"), score, second, lid))
 
     print(f"[INFO] Mapped names: {len(mapped)}  skipped: {len(skipped)}")
+
+    if "--apply" not in sys.argv:
+        suggestions = [
+            {"name": name, "records": n, "group_id": lid, "group_name": canon,
+             "score": score, "reason": f"look-alike score {score:.3f}"}
+            for n, name, canon, score, second, lid in mapped
+        ] + [
+            {"name": name, "records": n, "group_id": None, "group_name": canon,
+             "score": score, "reason": reason}
+            for n, name, reason, canon, score in skipped if name
+        ]
+        saved = save_mapping_suggestions(db, suggestions, "backfill_commodity_aliases")
+        print(f"[DONE] Saved {saved} suggestion(s) to review_items. Nothing else was changed.")
+        print("       Review them on the website, or re-run with --apply to write them directly.")
+        client.close()
+        return
 
     alias_modified = 0
     for lid, names in alias_ops.items():

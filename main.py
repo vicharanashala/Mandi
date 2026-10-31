@@ -57,6 +57,9 @@ from markets.othermarkets.run import run_all_scrapers
 # ── Database ──────────────────────────────────────────────────────────────────
 from database import normalise_all, upload_to_mongo
 
+# ── Run log + review list (for the review website) ───────────────────────────
+from review_log import save_run
+
 # ── Email Notification ────────────────────────────────────────────────────────
 from email_service import send_cron_notification, send_error_notification
 
@@ -266,7 +269,7 @@ def step5_save_json(merged: dict, path: str = "final_data.json") -> None:
 # STEP 6 — Normalise + upload to MongoDB
 # ─────────────────────────────────────────────────────────────────────────────
 
-def step6_upload(merged: dict) -> tuple[int, dict]:
+def step6_upload(merged: dict) -> tuple[int, dict, list[dict]]:
     """
     Normalise every state's raw records into the unified schema and
     bulk-upsert them into MongoDB.
@@ -277,18 +280,19 @@ def step6_upload(merged: dict) -> tuple[int, dict]:
 
     Returns
     -------
-    tuple[int, dict]
-        (normalised_documents_count, upload_statistics_dict)
+    tuple[int, dict, list[dict]]
+        (normalised_documents_count, upload_statistics_dict, normalised_documents)
     """
+    docs: list[dict] = []
     try:
         docs = normalise_all(merged)
         logger.info("Normalised %d documents. Uploading to MongoDB.", len(docs))
-        # upload_stats = upload_to_mongo(docs)
+        upload_stats = upload_to_mongo(docs)
         logger.info("MongoDB upload complete.")
-        return len(docs), upload_stats or {}
+        return len(docs), upload_stats or {}, docs
     except Exception as exc:
         logger.error("Upload failed: %s", exc)
-        return 0, {"error": str(exc)}
+        return len(docs), {"error": str(exc)}, docs
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -345,10 +349,13 @@ async def run_pipeline(date_str: str = "", skip_agmarknet: bool = False) -> None
     step5_save_json(merged)
 
     # Step 6 — upload to MongoDB
-    normalised_count, upload_stats = step6_upload(merged)
+    normalised_count, upload_stats, docs = step6_upload(merged)
 
     elapsed = (datetime.now() - start).total_seconds()
     log_scraping_summary(merged, elapsed)
+
+    # Record the run and its problems for the review website (never raises)
+    save_run(merged, docs, upload_stats, started_at=start, date_str=date_str)
 
     # Step 7 — Send email notification with complete run details
     try:
