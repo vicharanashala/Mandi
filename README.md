@@ -345,6 +345,14 @@ crops/products from the v1 groups, and creates one link per name. A link starts 
 `decided_by: migration`, `needs_check: true`) only when the v1 match was unambiguous and plausible;
 everything else starts pending with the v1 answer kept as a suggestion.
 
+### Farmer words (`crop_words`)
+Farmers ask in their own words ("dhan", "धान", "jhona"), which are not the spellings mandis report. The
+migration's last step (or `python maintenance/seed_crop_words.py --source Price --target Price --prefix v2_`)
+builds `crop_words` from the v1 aliases and `agriai.crop_master`'s local names, both only read. A word claimed
+by two crops ("rice") or that looks wrong ("hen" under groundnut) starts pending; re-running never overrides a
+reviewer's decision. `maintenance/recheck_v2_links.py` (report only unless `--apply`) re-runs the "looks wrong"
+check on links approved automatically and not yet reviewed.
+
 ### v2 next to v1 in the same database (`v2_` prefix)
 When a separate database is not available, v2 can live inside `Price` with every v2 collection prefixed:
 ```bash

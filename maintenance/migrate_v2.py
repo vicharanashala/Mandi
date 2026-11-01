@@ -59,6 +59,7 @@ if "--prefix" in sys.argv[:-1]:
 
 from catalog import ANY_VARIETY, ensure_catalog_indexes, norm  # noqa: E402
 from name_checks import looks_wrong  # noqa: E402
+from seed_crop_words import seed_crop_words  # noqa: E402
 import review_log  # noqa: E402
 
 # Spellings of one state, canonical name first. Codes are slugs of the canonical name.
@@ -105,6 +106,7 @@ def main() -> None:
     ap.add_argument("--replace", action="store_true", help="drop the target (or, with --prefix, only its v2 collections) first")
     ap.add_argument("--prefix", default="", help="put v2 next to v1, e.g. v2_ (allows --target == --source)")
     ap.add_argument("--uri", default=os.getenv("MONGO_URI"))
+    ap.add_argument("--crop-master-db", default="agriai", help="database with crop_master (farmer words); '' to skip")
     args = ap.parse_args()
     if not args.uri:
         raise SystemExit("Set MONGO_URI (or pass --uri).")
@@ -118,7 +120,7 @@ def main() -> None:
 
     V1 = {"markets_commodities", "price_records", "available_mandi", "commodity_alias_lookup"}
     C = {b: name(b) for b in ("listings", "price_records", "states", "crops", "products", "crop_names",
-                              "mandi_names", "ingestion_runs", "review_items", "audit_log", "migration_info")}
+                              "mandi_names", "crop_words", "ingestion_runs", "review_items", "audit_log", "migration_info")}
     if same_db and V1 & set(C.values()):
         raise SystemExit(f"Prefix {prefix!r} would reuse a v1 collection name.")
 
@@ -147,7 +149,7 @@ def main() -> None:
     now = datetime.now(timezone.utc)
 
     # ── 1. Server-side copies (v1 is only read) ──────────────────────────
-    print("[1/7] Copying price_records and listings" + ("" if same_db else " and available_mandi") + " …")
+    print("[1/8] Copying price_records and listings" + ("" if same_db else " and available_mandi") + " …")
     if not same_db:
         src.available_mandi.aggregate([{"$match": {}}, {"$out": {"db": args.target, "coll": mandi_coll_name}}], allowDiskUse=True)
         copy_indexes(src.available_mandi, dst[mandi_coll_name])
@@ -174,7 +176,7 @@ def main() -> None:
           f"mandis {mandi_coll.estimated_document_count()}")
 
     # ── 2. States ────────────────────────────────────────────────────────
-    print("[2/7] Building states …")
+    print("[2/8] Building states …")
     seen = {norm(s) for s in dst[C['listings']].distinct("state") + mandi_coll.distinct("state") if s}
     states: dict[str, dict] = {}
     for group in STATE_SPELLINGS:
@@ -189,7 +191,7 @@ def main() -> None:
     print(f"      {len(states)} states from {len(seen)} spellings")
 
     # ── 3. Crops and products from v1 groups ─────────────────────────────
-    print("[3/7] Building crops and products …")
+    print("[3/8] Building crops and products …")
     groups = list(src.commodity_alias_lookup.find({}))
     by_name: dict[str, list[dict]] = defaultdict(list)
     for g in groups:
@@ -215,7 +217,7 @@ def main() -> None:
     print(f"      {dst[C['crops']].count_documents({})} crops, {dst[C['products']].count_documents({})} products from {len(groups)} groups")
 
     # ── 4. Crop name links ───────────────────────────────────────────────
-    print("[4/7] Building crop_names …")
+    print("[4/8] Building crop_names …")
     holders: dict[str, set] = defaultdict(set)  # alias -> product ids holding it
     for g in groups:
         for a in g.get("aliases") or []:
@@ -263,7 +265,7 @@ def main() -> None:
     print(f"      {len(crop_docs)} crop names: {approved_crop['approved']} approved by migration, {approved_crop['pending']} pending")
 
     # ── 5. Mandi name links ──────────────────────────────────────────────
-    print("[5/7] Building mandi_names …")
+    print("[5/8] Building mandi_names …")
     mandis = {m["_id"]: m for m in mandi_coll.find({}, {"name": 1, "aliases": 1, "state": 1})}
     rows = src.markets_commodities.aggregate([
         {"$group": {"_id": {"source": "$source_system", "state": "$state", "name": "$market_name", "mid": "$market_id"}, "n": {"$sum": 1}}},
@@ -308,7 +310,7 @@ def main() -> None:
     print(f"      {len(mandi_docs)} mandi names: {approved_mandi['approved']} approved by migration, {approved_mandi['pending']} pending")
 
     # ── 6. Fill listings from the links ──────────────────────────────────
-    print("[6/7] Filling listings.state_code / product_id / mandi_id …")
+    print("[6/8] Filling listings.state_code / product_id / mandi_id …")
     ops = [UpdateMany({"state": raw}, {"$set": {"state_code": code_of.get(norm(raw))}}) for raw in dst[C['listings']].distinct("state") if raw]
     for d in crop_docs:
         if d["status"] == "approved":
@@ -323,9 +325,17 @@ def main() -> None:
         dst[C['listings']].bulk_write(ops, ordered=False)
 
     # ── 7. Operational collections ───────────────────────────────────────
-    print("[7/7] Creating ingestion_runs, review_items, audit_log …")
+    print("[7/8] Creating ingestion_runs, review_items, audit_log …")
     review_log.ensure_indexes(dst)
     dst[C['audit_log']].create_index([("at", -1)], name="at_desc")
+    print("[8/8] Seeding farmer words (crop_words) …")
+    try:
+        cm = client[args.crop_master_db]["crop_master"] if args.crop_master_db else None
+        words = seed_crop_words(src, dst, {"crops": C["crops"], "products": C["products"], "crop_words": C["crop_words"]}, cm, now)
+        print(f"      {words['approved']} words approved by seed, {words['pending']} pending")
+    except Exception as exc:  # crop_master unreadable: seed from v1 aliases only
+        print(f"[WARN] crop_master not used ({exc}); seeding from v1 aliases only")
+        words = seed_crop_words(src, dst, {"crops": C["crops"], "products": C["products"], "crop_words": C["crop_words"]}, None, now)
     dst[C['migration_info']].insert_one({"source": args.source, "at": now, "crop_names": dict(approved_crop), "mandi_names": dict(approved_mandi)})
 
     total = dst[C['listings']].estimated_document_count()

@@ -29,6 +29,8 @@ V2_PREFIX = (os.getenv("V2_COLLECTION_PREFIX") or "").strip()
 STATES_COLLECTION = (os.getenv("STATES_COLLECTION") or f"{V2_PREFIX}states").strip()
 CROP_NAMES_COLLECTION = (os.getenv("CROP_NAMES_COLLECTION") or f"{V2_PREFIX}crop_names").strip()
 MANDI_NAMES_COLLECTION = (os.getenv("MANDI_NAMES_COLLECTION") or f"{V2_PREFIX}mandi_names").strip()
+# Words farmers use for a crop ("dhan", "धान", "moongphali"); read by the price tool, not the scraper.
+CROP_WORDS_COLLECTION = (os.getenv("CROP_WORDS_COLLECTION") or f"{V2_PREFIX}crop_words").strip()
 
 ANY_VARIETY = "*"
 
@@ -39,6 +41,19 @@ def norm(value) -> str:
         return ""
     text = unicodedata.normalize("NFKC", str(value)).strip().lower()
     return re.sub(r"\s+", " ", text)
+
+
+def word_key(value) -> str:
+    """Order- and punctuation-insensitive key for matching words.
+
+    "Bengal Gram(Gram)(Whole)" -> "bengal gram whole"; "Ginger (Dry)" == "dry ginger".
+    Splits only on punctuation, symbols and spaces: Indian scripts use combining
+    vowel signs, which a plain \\w pattern would break apart ("धान" -> "ध", "न").
+    Same rules as the price tool and the review website.
+    """
+    text = unicodedata.normalize("NFKC", str(value or "")).lower()
+    cleaned = "".join(" " if unicodedata.category(ch)[0] in "PSZC" else ch for ch in text)
+    return " ".join(sorted(set(cleaned.split())))
 
 
 def ensure_catalog_indexes(db) -> None:
@@ -55,6 +70,8 @@ def ensure_catalog_indexes(db) -> None:
     )
     db[MANDI_NAMES_COLLECTION].create_index([("status", ASCENDING), ("listings", -1)], name="status_listings")
     db[MANDI_NAMES_COLLECTION].create_index([("mandi_id", ASCENDING)], name="mandi_id")
+    db[CROP_WORDS_COLLECTION].create_index([("key", ASCENDING)], unique=True, name="unique_word_key")
+    db[CROP_WORDS_COLLECTION].create_index([("status", ASCENDING)], name="status")
 
 
 class Catalog:

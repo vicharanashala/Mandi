@@ -37,7 +37,11 @@ def _related(a: str, b: str) -> bool:
     n = min(4, len(a), len(b))
     if a[:n] == b[:n] or a in b or b in a:
         return True
-    return min(len(a), len(b)) >= 5 and _edit_distance(a, b) <= max(1, max(len(a), len(b)) // 5)
+    if min(len(a), len(b)) < 5 or _edit_distance(a, b) > max(1, max(len(a), len(b)) // 5):
+        return False
+    # In short words only a missing or extra letter counts ("cummin"/"cumin"); a changed
+    # letter often makes a different crop ("chana"/"chafa").
+    return min(len(a), len(b)) >= 7 or len(a) != len(b)
 
 
 def looks_wrong(name: str, canonical: str | None, group_aliases: list[str] | None = None) -> bool:
