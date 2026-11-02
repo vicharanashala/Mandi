@@ -229,36 +229,30 @@ def test_seed_crop_words_rules_and_rerun_keeps_decisions():
     try:
         g_paddy, g_arom, g_gnut = ObjectId(), ObjectId(), ObjectId()
         db.commodity_alias_lookup.insert_many([
-            {"_id": g_paddy, "canonical_name": "paddy", "aliases": ["paddy", "paddy(common)"]},
+            {"_id": g_paddy, "canonical_name": "paddy", "aliases": ["paddy", "paddy(common)", "धान", "rice"]},
             {"_id": g_arom, "canonical_name": "aromatic rice", "aliases": ["aromatic rice", "rice"]},
             {"_id": g_gnut, "canonical_name": "groundnut", "aliases": ["groundnut", "hen", "ground nut seed"]},
         ])
-        cm_paddy = ObjectId()
         db.crops.insert_many([
-            {"_id": ObjectId(), "name": "paddy", "legacy_group_ids": [g_paddy], "crop_master_id": str(cm_paddy)},
+            {"_id": ObjectId(), "name": "paddy", "legacy_group_ids": [g_paddy]},
             {"_id": ObjectId(), "name": "aromatic rice", "legacy_group_ids": [g_arom]},
             {"_id": ObjectId(), "name": "groundnut", "legacy_group_ids": [g_gnut]},
         ])
         db.products.insert_many([{"name": c["name"], "crop_id": c["_id"]} for c in db.crops.find()])
-        db.crop_master.insert_one({"_id": cm_paddy, "name": "Paddy", "aliases": [
-            {"language": "Hindi", "english_representation": "dhan", "native_representation": "धान"},
-            {"language": "Telugu", "english_representation": "vari, rice", "native_representation": "వరి"},
-        ]})
         coll = {"crops": "crops", "products": "products", "crop_words": "crop_words"}
-        seed_crop_words(db, db, coll, db.crop_master)
+        seed_crop_words(db, db, coll)
         w = {d["key"]: d for d in db.crop_words.find()}
         paddy = db.crops.find_one({"name": "paddy"})["_id"]
-        assert w["dhan"]["status"] == "approved" and w["dhan"]["crop_id"] == paddy
-        assert w["धान"]["status"] == "approved" and "Hindi" in w["धान"]["languages"]
         assert w["common paddy"]["status"] == "approved"           # v1 alias, plausible
-        assert w["rice"]["status"] == "pending"                    # paddy (crop_master) vs aromatic rice (v1)
+        assert "धान" not in w                                      # Indian script: skipped
+        assert w["rice"]["status"] == "pending"                    # paddy vs aromatic rice
         assert len(w["rice"]["suggestion"]["candidates"]) == 2
         assert w["hen"]["status"] == "pending"                     # looks wrong under groundnut
         assert "paddy" not in w and "groundnut" not in w           # crop names resolve by name already
 
         # A reviewer's decision survives a re-run.
         db.crop_words.update_one({"key": "rice"}, {"$set": {"status": "approved", "crop_id": paddy, "decided_by": "expert"}})
-        seed_crop_words(db, db, coll, db.crop_master)
+        seed_crop_words(db, db, coll)
         again = db.crop_words.find_one({"key": "rice"})
         assert again["status"] == "approved" and again["decided_by"] == "expert"
         assert db.crop_words.count_documents({}) == len(w)

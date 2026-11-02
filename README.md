@@ -346,9 +346,10 @@ crops/products from the v1 groups, and creates one link per name. A link starts 
 everything else starts pending with the v1 answer kept as a suggestion.
 
 ### Farmer words (`crop_words`)
-Farmers ask in their own words ("dhan", "धान", "jhona"), which are not the spellings mandis report. The
-migration's last step (or `python maintenance/seed_crop_words.py --source Price --target Price --prefix v2_`)
-builds `crop_words` from the v1 aliases and `agriai.crop_master`'s local names, both only read. A word claimed
+The farmer's question reaches the price tool already translated into English, so `crop_words` holds only
+English words: other names for a crop ("dry chillies", "blackgram"). The migration's last step (or
+`python maintenance/seed_crop_words.py --source Price --target Price --prefix v2_`) builds it from the v1
+aliases, which are only read; words in an Indian script are skipped. A word claimed
 by two crops ("rice") or that looks wrong ("hen" under groundnut) starts pending; re-running never overrides a
 reviewer's decision. `maintenance/recheck_v2_links.py` (report only unless `--apply`) re-runs the "looks wrong"
 check on links approved automatically and not yet reviewed.

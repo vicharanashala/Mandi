@@ -106,7 +106,6 @@ def main() -> None:
     ap.add_argument("--replace", action="store_true", help="drop the target (or, with --prefix, only its v2 collections) first")
     ap.add_argument("--prefix", default="", help="put v2 next to v1, e.g. v2_ (allows --target == --source)")
     ap.add_argument("--uri", default=os.getenv("MONGO_URI"))
-    ap.add_argument("--crop-master-db", default="agriai", help="database with crop_master (farmer words); '' to skip")
     args = ap.parse_args()
     if not args.uri:
         raise SystemExit("Set MONGO_URI (or pass --uri).")
@@ -329,13 +328,8 @@ def main() -> None:
     review_log.ensure_indexes(dst)
     dst[C['audit_log']].create_index([("at", -1)], name="at_desc")
     print("[8/8] Seeding farmer words (crop_words) …")
-    try:
-        cm = client[args.crop_master_db]["crop_master"] if args.crop_master_db else None
-        words = seed_crop_words(src, dst, {"crops": C["crops"], "products": C["products"], "crop_words": C["crop_words"]}, cm, now)
-        print(f"      {words['approved']} words approved by seed, {words['pending']} pending")
-    except Exception as exc:  # crop_master unreadable: seed from v1 aliases only
-        print(f"[WARN] crop_master not used ({exc}); seeding from v1 aliases only")
-        words = seed_crop_words(src, dst, {"crops": C["crops"], "products": C["products"], "crop_words": C["crop_words"]}, None, now)
+    words = seed_crop_words(src, dst, {"crops": C["crops"], "products": C["products"], "crop_words": C["crop_words"]}, now)
+    print(f"      {words['approved']} words approved by seed, {words['pending']} pending")
     dst[C['migration_info']].insert_one({"source": args.source, "at": now, "crop_names": dict(approved_crop), "mandi_names": dict(approved_mandi)})
 
     total = dst[C['listings']].estimated_document_count()

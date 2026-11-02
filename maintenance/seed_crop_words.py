@@ -4,20 +4,20 @@ seed_crop_words.py — fill the farmer word list (v2) from existing word lists.
     python maintenance/seed_crop_words.py --source Price --target Price --prefix v2_
     python maintenance/seed_crop_words.py --source Price --target PriceV2
 
-Farmers ask in their own words ("dhan", "धान", "jhona", "moongphali"); those are
-not the spellings mandis report. This builds <prefix>crop_words: one row per
-word key, pointing at one crop (the price tool uses the crop's default product),
-from two sources that are only read:
-
-  v1 commodity_alias_lookup aliases   (source "v1_alias")
-  agriai.crop_master aliases           (source "crop_master:<language>")
+The farmer's question reaches the price tool already translated into English,
+so only English words are kept: other names and spellings for a crop that are
+not the crop or product name itself ("dry chillies", "blackgram"). This
+builds <prefix>crop_words: one row per word key, pointing at one crop (the price
+tool uses the crop's default product), from the v1 commodity_alias_lookup
+aliases (source "v1_alias"), which are only read. Words in an Indian script
+are skipped.
 
 A word starts "approved" (decided_by "seed", needs_check true) only when every
 source agrees on one crop and the word does not look unrelated to it. A word
 claimed by two crops ("rice": paddy and aromatic rice) or that looks wrong
 ("hen" under groundnut) starts "pending" with the candidates as a suggestion.
 
-Safe to re-run: an existing row only gains sources and languages; its status
+Safe to re-run: an existing row only gains sources; its status
 and target are never changed, so reviewers' decisions stay.
 """
 
@@ -42,69 +42,43 @@ from catalog import word_key  # noqa: E402
 from name_checks import looks_wrong  # noqa: E402
 
 
-def _split_words(value) -> list[str]:
-    if not isinstance(value, str):
-        return []
-    return [w.strip() for w in value.replace(";", ",").split(",") if w.strip()]
-
-
-def seed_crop_words(src, dst, coll: dict[str, str], crop_master=None, now: datetime | None = None) -> dict:
+def seed_crop_words(src, dst, coll: dict[str, str], now: datetime | None = None) -> dict:
     """
     src: v1 database (commodity_alias_lookup). dst: v2 database.
     coll: v2 collection names, keys "crops", "products", "crop_words".
-    crop_master: agriai.crop_master collection, or None to skip it.
     """
     now = now or datetime.now(timezone.utc)
-    crops = list(dst[coll["crops"]].find({}, {"name": 1, "legacy_group_ids": 1, "crop_master_id": 1}))
+    crops = list(dst[coll["crops"]].find({}, {"name": 1, "legacy_group_ids": 1}))
     crop_by_group = {gid: c for c in crops for gid in (c.get("legacy_group_ids") or [])}
     crop_by_key = {word_key(c["name"]): c for c in crops}
-    crop_by_master = {str(c["crop_master_id"]): c for c in crops if c.get("crop_master_id")}
     crop_name = {c["_id"]: c["name"] for c in crops}
     # Words that already resolve by a crop or product name need no entry.
     name_keys = set(crop_by_key) | {word_key(p["name"]) for p in dst[coll["products"]].find({}, {"name": 1})}
 
-    # key -> {"word", "targets": {crop_id: set(sources)}, "languages", "wrong": set(crop_id)}
-    cand: dict[str, dict] = defaultdict(lambda: {"word": None, "targets": defaultdict(set), "languages": set(), "wrong": set()})
+    # key -> {"word", "targets": {crop_id: set(sources)}, "wrong": set(crop_id)}
+    cand: dict[str, dict] = defaultdict(lambda: {"word": None, "targets": defaultdict(set), "wrong": set()})
 
-    def add(text: str, crop, source: str, language: str | None = None, aliases: list[str] | None = None) -> None:
+    def add(text: str, crop, source: str, aliases: list[str]) -> None:
         key = word_key(text)
-        if not key or len(key) < 2 or key in name_keys or crop is None:
+        if not key or len(key) < 2 or key in name_keys or crop is None or not str(text).isascii():
             return
         c = cand[key]
         c["word"] = c["word"] or " ".join(str(text).split()).lower()
         c["targets"][crop["_id"]].add(source)
-        if language:
-            c["languages"].add(language)
-        # Only the v1 aliases are polluted ("hen" under groundnut). crop_master names are
-        # curated local names, which never look like the English crop name ("dhan").
-        if source == "v1_alias" and looks_wrong(text, crop["name"], aliases or []):
+        # v1 aliases are polluted ("hen" under groundnut).
+        if looks_wrong(text, crop["name"], aliases):
             c["wrong"].add(crop["_id"])
 
     for g in src.commodity_alias_lookup.find({}, {"aliases": 1}):
         crop = crop_by_group.get(g["_id"])
         aliases = [a for a in (g.get("aliases") or []) if isinstance(a, str)]
         for a in aliases:
-            add(a, crop, "v1_alias", aliases=aliases)
-
-    if crop_master is not None:
-        for m in crop_master.find({}, {"name": 1, "aliases": 1}):
-            crop = crop_by_master.get(str(m["_id"])) or crop_by_key.get(word_key(m.get("name")))
-            for item in m.get("aliases") or []:
-                if isinstance(item, str):
-                    add(item, crop, "crop_master")
-                    continue
-                if not isinstance(item, dict):
-                    continue
-                lang = (item.get("language") or "").strip() or None
-                for field in ("english_representation", "native_representation"):
-                    for w in _split_words(item.get(field)):
-                        add(w, crop, f"crop_master:{lang}" if lang else "crop_master", lang)
+            add(a, crop, "v1_alias", aliases)
 
     ops, counts = [], {"approved": 0, "pending": 0}
     for key, c in cand.items():
         targets = c["targets"]
-        # A v1 warning does not count when crop_master names the same crop.
-        wrong = {cid for cid in c["wrong"] if not any(s.startswith("crop_master") for s in targets[cid])}
+        wrong = c["wrong"]
         ok = len(targets) == 1 and not wrong
         crop_id = next(iter(targets)) if ok else None
         sources = sorted({s for v in targets.values() for s in v})
@@ -126,7 +100,7 @@ def seed_crop_words(src, dst, coll: dict[str, str], crop_master=None, now: datet
                     "decided_by": "seed" if ok else None, "decided_at": now if ok else None,
                     "needs_check": ok, "notes": None, "created_at": now,
                 },
-                "$addToSet": {"sources": {"$each": sources}, "languages": {"$each": sorted(c["languages"])}},
+                "$addToSet": {"sources": {"$each": sources}},
             },
             upsert=True,
         ))
@@ -144,8 +118,6 @@ def main() -> None:
     ap.add_argument("--target", required=True)
     ap.add_argument("--prefix", default="")
     ap.add_argument("--uri", default=os.getenv("MONGO_URI"))
-    ap.add_argument("--crop-master-db", default="agriai")
-    ap.add_argument("--crop-master-collection", default="crop_master")
     args = ap.parse_args()
     if not args.uri:
         raise SystemExit("Set MONGO_URI (or pass --uri).")
@@ -154,10 +126,9 @@ def main() -> None:
     client = MongoClient(args.uri, serverSelectionTimeoutMS=15000)
     p = args.prefix
     coll = {"crops": f"{p}crops", "products": f"{p}products", "crop_words": f"{p}crop_words"}
-    cm = client[args.crop_master_db][args.crop_master_collection] if args.crop_master_db else None
-    counts = seed_crop_words(client[args.source], client[args.target], coll, cm)
+    counts = seed_crop_words(client[args.source], client[args.target], coll)
     print(f"[DONE] farmer words: {counts.get('new', 0)} new; of all words seen {counts['approved']} approved by seed, "
-          f"{counts['pending']} pending. v1 and crop_master were only read.")
+          f"{counts['pending']} pending. v1 was only read.")
 
 
 if __name__ == "__main__":
