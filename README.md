@@ -336,6 +336,14 @@ disappear on the next scrape, and meant every fix rewrote price history.
 5. `review_log.py` records the run per source and state, and adds review items for failed sources,
    unknown state spellings and impossible prices.
 
+**Why a run is faster than in v1.** v1 resolved each new mandi and crop name with database queries during
+normalisation: up to six case-insensitive regex queries per mandi name (exact, alias, "+ apmc" variations,
+partial, cross-state) and two per crop name. Regex queries cannot use an index, so each one scanned the whole
+collection over the network. v2 loads the three link tables (`states`, `crop_names`, `mandi_names`) once per
+run; every lookup after that is an in-memory dictionary hit, and new names are written in one bulk write at the
+end. Price rows are also smaller (no copied `market_id` / `commodity_alias_lookup_id`). Fetching from the sources
+takes the same time as before; recent runs fetch 21,000–31,000 records in 5–7 minutes.
+
 ### Building the v2 database
 ```bash
 python maintenance/migrate_v2.py --source Price --target PriceV2      # v1 is only read

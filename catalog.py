@@ -29,7 +29,7 @@ V2_PREFIX = (os.getenv("V2_COLLECTION_PREFIX") or "").strip()
 STATES_COLLECTION = (os.getenv("STATES_COLLECTION") or f"{V2_PREFIX}states").strip()
 CROP_NAMES_COLLECTION = (os.getenv("CROP_NAMES_COLLECTION") or f"{V2_PREFIX}crop_names").strip()
 MANDI_NAMES_COLLECTION = (os.getenv("MANDI_NAMES_COLLECTION") or f"{V2_PREFIX}mandi_names").strip()
-# Words farmers use for a crop ("dhan", "धान", "moongphali"); read by the price tool, not the scraper.
+# Other English names for a crop ("dry chillies", "blackgram"); read by the price tool, not the scraper.
 CROP_WORDS_COLLECTION = (os.getenv("CROP_WORDS_COLLECTION") or f"{V2_PREFIX}crop_words").strip()
 
 ANY_VARIETY = "*"
