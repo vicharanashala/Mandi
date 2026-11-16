@@ -1,0 +1,135 @@
+name: v2 - Scrape every 2 hours
+
+# ------------------------------------------------------------------------------
+# Runs the v2 scraper (feat/catalog-v2) against the v2 collections every 2 hours.
+#
+# IMPORTANT: GitHub only fires `schedule:` triggers from the repository's DEFAULT
+# branch. To run this on feat/catalog-v2 without touching main's files, set the
+# default branch to feat/catalog-v2 (Settings > Branches > Default branch).
+# Manual runs (workflow_dispatch) work from the branch without that setting.
+# The job checks out the branch it was triggered on.
+#
+# Jobs:
+#   1. compat  - tests against a throwaway MongoDB + config guard against the real
+#                DB (refuses to continue if it would touch v1 collections).
+#   2. scrape  - builds the image and runs main.py, then verifies fresh v2 rows.
+#
+# Secrets / variables to create (Settings > Secrets and variables > Actions):
+#   Secret   MONGO_URI              Atlas connection string
+#   Variable MANDI_DB_NAME          Price
+#   Variable V2_COLLECTION_PREFIX   v2_
+#   Variable ALL_MANDI_COLLECTION   available_mandi   (optional, this is the default)
+#   Secret   EMAIL_PASS             optional - only for email notifications
+#   Variable NOTIFICATION_EMAIL     optional - comma-separated recipients
+# ------------------------------------------------------------------------------
+
+on:
+  schedule:
+    - cron: "23 */2 * * *"   # every 2 hours (UTC), offset from :00 to avoid the busy top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-scrape
+  cancel-in-progress: false   # never kill a run that is writing; the next one waits
+
+jobs:
+  compat:
+    name: Compatibility check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Start a throwaway MongoDB
+        run: |
+          docker run -d --name test-mongo -p 27017:27017 mongo:7
+          for i in $(seq 1 60); do
+            if docker exec test-mongo mongosh --quiet --eval "db.runCommand({ ping: 1 }).ok" 2>/dev/null | grep -q 1; then
+              echo "MongoDB is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error title=mongodb::MongoDB did not start"; exit 1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Tests
+        env:
+          TEST_MONGO_URI: mongodb://127.0.0.1:27017
+          MASTER_COLLECTION: listings
+          PRICE_COLLECTION: price_records
+          ALL_MANDI_COLLECTION: available_mandi
+        run: python -m pytest -q -rfE --tb=short tests
+      - name: Config guard (real DB, read-only)
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          MANDI_DB_NAME: ${{ vars.MANDI_DB_NAME }}
+          V2_COLLECTION_PREFIX: ${{ vars.V2_COLLECTION_PREFIX }}
+        run: |
+          # database.py exits if the config would write to v1 collections.
+          python - <<'PY'
+          import os, sys
+          from pymongo import MongoClient
+          import database  # raises SystemExit on a v1/v2 mix-up
+          db = MongoClient(os.environ["MONGO_URI"], serverSelectionTimeoutMS=20000)[database.DB_NAME]
+          need = [database.MASTER_COLLECTION, database.PRICE_COLLECTION]
+          have = set(db.list_collection_names())
+          missing = [c for c in need if c not in have]
+          if missing:
+              sys.exit(f"missing collections in {database.DB_NAME}: {missing}")
+          print("OK", database.DB_NAME, need)
+          PY
+
+  scrape:
+    name: Scrape and upload (v2)
+    needs: compat
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t mandi-v2 .
+      - name: Run main.py
+        run: |
+          docker run --rm \
+            -e MONGO_URI="${{ secrets.MONGO_URI }}" \
+            -e MANDI_DB_NAME="${{ vars.MANDI_DB_NAME }}" \
+            -e V2_COLLECTION_PREFIX="${{ vars.V2_COLLECTION_PREFIX }}" \
+            -e ALL_MANDI_COLLECTION="${{ vars.ALL_MANDI_COLLECTION }}" \
+            -e EMAIL_PASS="${{ secrets.EMAIL_PASS }}" \
+            -e NOTIFICATION_EMAIL="${{ vars.NOTIFICATION_EMAIL }}" \
+            -e AGMARKNET_CONCURRENCY=2 \
+            -e AGMARKNET_PAGE_DELAY=2.0 \
+            -e AGMARKNET_HTTP_RETRIES=6 \
+            -e AGMARKNET_BACKOFF_BASE=15 \
+            -e AGMARKNET_CONNECT_TIMEOUT=60 \
+            -e AGMARKNET_READ_TIMEOUT=180 \
+            -e AGMARKNET_STATE_DELAY=1.0 \
+            -e AP_MARKET_RETRIES=5 \
+            -e AP_MARKET_BACKOFF_BASE=15 \
+            -e AP_MARKET_TIMEOUT=120 \
+            mandi-v2 python main.py
+      - name: Verify fresh v2 rows were written
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          MANDI_DB_NAME: ${{ vars.MANDI_DB_NAME }}
+          V2_COLLECTION_PREFIX: ${{ vars.V2_COLLECTION_PREFIX }}
+        run: |
+          pip install -q pymongo
+          python - <<'PY'
+          import os, sys
+          from datetime import datetime, timedelta, timezone
+          from pymongo import MongoClient
+          db = MongoClient(os.environ["MONGO_URI"], serverSelectionTimeoutMS=20000)[os.environ["MANDI_DB_NAME"]]
+          coll = db[os.environ["V2_COLLECTION_PREFIX"] + "price_records"]
+          since = datetime.now(timezone.utc) - timedelta(hours=3)
+          n = coll.count_documents({"ingested_at": {"$gte": since}})
+          print("rows ingested in the last 3h:", n)
+          if n == 0:
+              sys.exit("scraper finished but wrote no fresh v2 rows")
+          PY
