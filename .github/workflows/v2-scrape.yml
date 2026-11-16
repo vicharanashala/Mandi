@@ -1,13 +1,10 @@
-name: v2 - Scrape every 2 hours
+name: v2 - Scrape (manual)
 
 # ------------------------------------------------------------------------------
-# Runs the v2 scraper (feat/catalog-v2) against the v2 collections every 2 hours.
+# Runs the v2 scraper (feat/catalog-v2) against the v2 collections, on demand.
 #
-# IMPORTANT: GitHub only fires `schedule:` triggers from the repository's DEFAULT
-# branch. To run this on feat/catalog-v2 without touching main's files, set the
-# default branch to feat/catalog-v2 (Settings > Branches > Default branch).
-# Manual runs (workflow_dispatch) work from the branch without that setting.
-# The job checks out the branch it was triggered on.
+# Run it from the Actions tab: Run workflow, branch feat/catalog-v2.
+# No schedule: scheduled runs only fire from the default branch.
 #
 # Jobs:
 #   1. compat  - tests against a throwaway MongoDB + config guard against the real
@@ -30,8 +27,6 @@ on:
   push:
     branches: [feat/catalog-v2]
     paths: [".github/workflows/v2-scrape.yml"]
-  schedule:
-    - cron: "23 */2 * * *"   # every 2 hours (UTC), offset from :00 to avoid the busy top of the hour
   workflow_dispatch:
 
 permissions:
