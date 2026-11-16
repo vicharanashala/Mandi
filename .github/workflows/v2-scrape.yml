@@ -24,6 +24,12 @@ name: v2 - Scrape every 2 hours
 # ------------------------------------------------------------------------------
 
 on:
+  # Runs when THIS file is pushed on the v2 branch. That registers the workflow
+  # so the "Run workflow" button appears in the Actions tab (GitHub only lists
+  # workflows it has seen on the default branch or run on a branch).
+  push:
+    branches: [feat/catalog-v2]
+    paths: [".github/workflows/v2-scrape.yml"]
   schedule:
     - cron: "23 */2 * * *"   # every 2 hours (UTC), offset from :00 to avoid the busy top of the hour
   workflow_dispatch:
