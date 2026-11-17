@@ -476,6 +476,7 @@ def _meghalaya_parse_page(soup: BeautifulSoup, report_date: str) -> list[dict]:
         return []
 
     records = []
+    current_group = None  # Group Name cell uses rowspan; forward-fill it
     for row in table.find_all("tr")[1:]:  # skip header row
         cells = row.find_all("td")
         if not cells:
@@ -486,7 +487,8 @@ def _meghalaya_parse_page(soup: BeautifulSoup, report_date: str) -> list[dict]:
 
         texts = [c.get_text(strip=True) for c in cells]
         if len(texts) == 10:
-            values = texts[1:]   # drop the Group Name cell
+            current_group = texts[0]
+            values = texts[1:]
         elif len(texts) == 9:
             values = texts
         else:
@@ -495,7 +497,7 @@ def _meghalaya_parse_page(soup: BeautifulSoup, report_date: str) -> list[dict]:
         if len(values) != 9:
             continue
 
-        entry = {"date": report_date}
+        entry = {"date": report_date, "commodity_group": current_group}
         entry.update(dict(zip(_MEGHALAYA_KEEP_COLS, values)))
 
         # Cast numeric columns from string to int where possible
