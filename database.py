@@ -296,6 +296,7 @@ def _norm_agmarknet(record: dict, state: str) -> dict:
     return dict(
         source_system              = "agmarknet",
         state                      = _lower(record_state),
+        district                   = _lower(record.get("district") or record.get("District")),
         date                       = _parse_date(
             record.get("arrival_date") or record.get("Arrival_Date") or record.get("reported_date")
         ),
@@ -368,6 +369,10 @@ MASTER_FIELDS = {
     "variety", "grade", "source_url", "source_name", "method",
 }
 
+# Not part of the listing key. Refreshed every run (so old listings fill in too),
+# and copied onto the mandi name so reviewers can check it against available_mandi.
+DISTRICT_FIELD = "district"
+
 # Fields that belong to the price fact table. Prices point only at their
 # listing (market_commodity_id); crop and mandi come from the listing.
 PRICE_FIELDS = {
@@ -385,7 +390,7 @@ def split_document(doc: dict) -> tuple[dict, dict]:
       - master_doc : static meta fields (written once)
       - price_doc  : price + quantity fields (written every 2 hours)
     """
-    master_doc = {k: doc[k] for k in MASTER_FIELDS if k in doc}
+    master_doc = {k: doc[k] for k in (*MASTER_FIELDS, DISTRICT_FIELD) if k in doc}
     price_doc  = {k: doc[k] for k in PRICE_FIELDS  if k in doc}
     return master_doc, price_doc
 
@@ -590,7 +595,8 @@ def upload_to_mongo(
         # every run so an approval, rejection or change takes effect at once.
         state_code = catalog.state_code(filter_key["state"])
         product_id = catalog.product_for(filter_key["source_system"], filter_key["commodity_name"], filter_key["variety"])
-        mandi_id = catalog.mandi_for(filter_key["source_system"], state_code, filter_key["market_name"])
+        district = (master_doc.get(DISTRICT_FIELD) or "").strip().lower() or None
+        mandi_id = catalog.mandi_for(filter_key["source_system"], state_code, filter_key["market_name"], district)
         doc["state_code"], doc["product_id"], doc["mandi_id"] = state_code, product_id, mandi_id
 
         set_always = {
@@ -598,6 +604,7 @@ def upload_to_mongo(
             "product_id": product_id,
             "mandi_id":   mandi_id,
             "last_seen":  now,
+            **({"district": district} if district else {}),
         }
 
         master_ops.append(UpdateOne(

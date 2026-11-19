@@ -259,3 +259,35 @@ def test_seed_crop_words_rules_and_rerun_keeps_decisions():
     finally:
         client.drop_database(name)
         client.close()
+
+
+class _FakeColl:
+    def __init__(self, docs=()):
+        self.docs, self.ops = list(docs), []
+
+    def find(self, *a, **k):
+        return iter(self.docs)
+
+    def bulk_write(self, ops, **k):
+        self.ops += ops
+
+
+class _FakeDb(dict):
+    def __getitem__(self, name):
+        import catalog
+        if name not in self:
+            self[name] = _FakeColl([{"_id": "keralam", "name": "keralam", "spellings": []}] if name == catalog.STATES_COLLECTION else [])
+        return dict.__getitem__(self, name)
+
+
+def test_mandi_names_keep_district_and_skip_unknown_state():
+    import catalog
+    db = _FakeDb()
+    c = catalog.Catalog(db)
+    state = c.state_code("keralam")
+    c.mandi_for("agmarknet", state, "mukkom market", "alappuzha")
+    c.mandi_for("agmarknet", c.state_code("not a state"), "ghost market", "x")
+    assert c.new_mandi_names() == [("agmarknet", "keralam", "mukkom market")]
+    c.flush()
+    ops = db[catalog.MANDI_NAMES_COLLECTION].ops
+    assert len(ops) == 1 and ops[0]._doc["$set"]["district"] == "alappuzha"

@@ -98,6 +98,7 @@ class Catalog:
         # Seen this run: key -> number of records
         self.crop_seen: dict[tuple[str, str, str], int] = {}
         self.mandi_seen: dict[tuple[str, str, str], int] = {}
+        self.mandi_district: dict[tuple[str, str, str], dict[str, int]] = {}
         self.unknown_states: dict[str, int] = {}
 
     # ── lookups ──────────────────────────────────────────────────────────
@@ -125,22 +126,32 @@ class Catalog:
         link = self.crop_links.get(any_key)
         return link[1] if link and link[0] == "approved" else None
 
-    def mandi_for(self, source, state_code, raw_name):
+    def mandi_for(self, source, state_code, raw_name, district=None):
         """Approved available_mandi _id for a mandi name, else None (and the name is recorded)."""
         key = (norm(source), state_code or "", norm(raw_name))
         if not key[0] or not key[2]:
             return None
         self.mandi_seen[key] = self.mandi_seen.get(key, 0) + 1
+        if district and norm(district):
+            counts = self.mandi_district.setdefault(key, {})
+            counts[norm(district)] = counts.get(norm(district), 0) + 1
         link = self.mandi_links.get(key)
         return link[1] if link and link[0] == "approved" else None
 
     # ── write-back ───────────────────────────────────────────────────────
 
+    def _district_set(self, key) -> dict:
+        """The district most often reported for this mandi name this run, if any."""
+        counts = self.mandi_district.get(key)
+        return {"district": max(counts, key=counts.get)} if counts else {}
+
     def new_crop_names(self) -> list[tuple[str, str, str]]:
         return [k for k in self.crop_seen if k not in self.crop_links]
 
     def new_mandi_names(self) -> list[tuple[str, str, str]]:
-        return [k for k in self.mandi_seen if k not in self.mandi_links]
+        # A name with no known state is not stored: the state spelling has to be added
+        # first (see unknown_states). Storing it would leave a stateless duplicate behind.
+        return [k for k in self.mandi_seen if k[1] and k not in self.mandi_links]
 
     def flush(self, now: datetime | None = None) -> dict:
         """Insert new names as pending; refresh last_seen on every name seen this run."""
@@ -163,11 +174,13 @@ class Catalog:
                 {
                     "$setOnInsert": {"mandi_id": None, "status": "pending", "suggestion": None,
                                      "decided_by": None, "decided_at": None, "notes": None, "first_seen": now},
-                    "$set": {"last_seen": now, "records_last_run": count},
+                    "$set": {"last_seen": now, "records_last_run": count,
+                             **self._district_set((s, st, n))},
                 },
                 upsert=True,
             )
             for (s, st, n), count in self.mandi_seen.items()
+            if st
         ]
         stats = {"new_crop_names": len(self.new_crop_names()), "new_mandi_names": len(self.new_mandi_names())}
         if crop_ops:
